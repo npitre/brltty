@@ -154,12 +154,12 @@ verifyPacket (
 
     case 2:
       switch (byte) {
-        case '?':
-        case 'C':
+        case CB_PKT_DeviceIdentity:
+        case CB_PKT_RoutingKey:
           *length = 3;
           return BRL_PVR_INCLUDE;
 
-        case 'K':
+        case CB_PKT_NavigationKeys:
           *length = 4;
           return BRL_PVR_INCLUDE;
 
@@ -184,14 +184,17 @@ writePacket (BrailleDisplay *brl, const void *bytes, size_t size) {
 
 static int
 writeIdentifyRequest (BrailleDisplay *brl) {
-  static const unsigned char packet[] = {ASCII_ESC, '?'};
+  static const unsigned char packet[] = {
+    ASCII_ESC, CB_PKT_DeviceIdentity
+  };
+
   return writePacket(brl, packet, sizeof(packet));
 }
 
 static BrailleResponseResult
 isIdentityResponse (BrailleDisplay *brl, const void *packet, size_t size) {
   const unsigned char *bytes = packet;
-  return (bytes[1] == '?')? BRL_RSP_DONE: BRL_RSP_UNEXPECTED;
+  return (bytes[1] == CB_PKT_DeviceIdentity)? BRL_RSP_DONE: BRL_RSP_UNEXPECTED;
 }
 
 static int
@@ -287,7 +290,10 @@ brl_writeWindow (BrailleDisplay *brl, const wchar_t *text) {
 
   /* Only refresh display if the data has changed: */
   if (textChanged || statusChanged) {
-    static const unsigned char header[] = {ASCII_ESC, 'B'};
+    static const unsigned char header[] = {
+      ASCII_ESC, CB_PKT_WriteCells
+    };
+
     unsigned char buffer[sizeof(header) + ((brl->statusColumns + brl->textColumns) * 2)];
 
     unsigned char *byte = buffer;
@@ -321,7 +327,7 @@ brl_readCommand (BrailleDisplay *brl, KeyTableCommandContext context) {
 
   while ((length = readPacket(brl, packet, sizeof(packet)))) {
     switch (packet[1]) {
-      case 'C': {
+      case CB_PKT_RoutingKey: {
         char key = packet[2];
 
         if (key < 6) {
@@ -333,7 +339,7 @@ brl_readCommand (BrailleDisplay *brl, KeyTableCommandContext context) {
         continue;
       }
 
-      case 'K': {
+      case CB_PKT_NavigationKeys: {
         if (packet[2]) {
           enqueueKeys(brl, packet[2], CB_GRP_NavigationKeys, CB_KEY_Dot6);
         } else {

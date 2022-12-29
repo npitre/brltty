@@ -20,7 +20,14 @@
 #define BRLTTY_INCLUDED_CB_BRLDEFS
 
 typedef enum {
-  CB_KEY_Dot6 = 1,
+  CB_PKT_DeviceIdentity = '?',
+  CB_PKT_WriteCells     = 'B',
+  CB_PKT_RoutingKey     = 'C',
+  CB_PKT_NavigationKeys = 'K',
+} CB_PacketType;
+
+typedef enum {
+  CB_KEY_Dot6 = 0,
   CB_KEY_Dot5,
   CB_KEY_Dot4,
   CB_KEY_Dot1,
@@ -38,12 +45,12 @@ typedef enum {
   CB_KEY_Status3,
   CB_KEY_Status4,
   CB_KEY_Status5,
-  CB_KEY_Status6
+  CB_KEY_Status6,
 } CB_NavigationKey;
 
 typedef enum {
   CB_GRP_NavigationKeys = 0,
-  CB_GRP_RoutingKeys
+  CB_GRP_RoutingKeys,
 } CB_KeyGroup;
 
 #endif /* BRLTTY_INCLUDED_CB_BRLDEFS */ 
