@@ -201,7 +201,7 @@ static int
 connectResource (BrailleDisplay *brl, const char *identifier) {
   static const SerialParameters serialParameters = {
     SERIAL_DEFAULT_PARAMETERS,
-    .baud = BAUDRATE,
+    .baud = CB_SERIAL_BAUD,
     .flowControl = SERIAL_FLOW_HARDWARE,
   };
 

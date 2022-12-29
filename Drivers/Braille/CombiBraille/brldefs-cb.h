@@ -19,6 +19,8 @@
 #ifndef BRLTTY_INCLUDED_CB_BRLDEFS
 #define BRLTTY_INCLUDED_CB_BRLDEFS
 
+#define CB_SERIAL_BAUD 38400		/* baud rate for Braille display */
+
 typedef enum {
   CB_PKT_DeviceIdentity = '?',
   CB_PKT_WriteCells     = 'B',
