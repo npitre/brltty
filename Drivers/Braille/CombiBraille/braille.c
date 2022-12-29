@@ -80,6 +80,8 @@ END_KEY_TABLE_LIST
 #define MAX_TEXT_CELLS 80
 #define STATUS_CELLS 5
 
+BrailleDisplay *cbBrailleDisplay = NULL;
+
 typedef struct {
   char identifier;
   char textColumns;
@@ -245,6 +247,7 @@ brl_construct (BrailleDisplay *brl, char **parameters, const char *device) {
           setBrailleKeyTable(brl, &KEY_TABLE_DEFINITION(all));
           MAKE_OUTPUT_TABLE(0X01, 0X02, 0X04, 0X80, 0X40, 0X20, 0X08, 0X10);
 
+          cbBrailleDisplay = brl;
           return 1;
         } else {
           logMessage(LOG_ERR, "detected unknown CombiBraille model with ID %02X", identifier);
@@ -264,6 +267,7 @@ brl_construct (BrailleDisplay *brl, char **parameters, const char *device) {
 
 static void
 brl_destruct (BrailleDisplay *brl) {
+  cbBrailleDisplay = NULL;
   disconnectBrailleResource(brl, NULL);
   free(brl->data);
 }

@@ -17,7 +17,6 @@
  */
 
 /* used by speech.c */
-#include "io_serial.h"
-extern SerialDevice *CB_serialDevice;
-extern int CB_charactersPerSecond;			/* file descriptor for Braille display */
+#include "brl_types.h"
+extern BrailleDisplay *cbBrailleDisplay;
 
