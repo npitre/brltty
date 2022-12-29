@@ -131,10 +131,12 @@ struct BrailleDataStruct {
   const ModelEntry *model;
 
   struct {
+    unsigned char refresh;
     unsigned char previous[MAX_TEXT_CELLS];
   } text;
 
   struct {
+    unsigned char refresh;
     unsigned char current[STATUS_CELLS];
     unsigned char previous[STATUS_CELLS];
   } status;
@@ -223,6 +225,8 @@ static int
 brl_construct (BrailleDisplay *brl, char **parameters, const char *device) {
   if ((brl->data = malloc(sizeof(*brl->data)))) {
     memset(brl->data, 0, sizeof(*brl->data));
+    brl->data->text.refresh = 1;
+    brl->data->status.refresh = 1;
 
     if (connectResource(brl, device)) {
       unsigned char response[MAX_INPUT_PACKET_SIZE];
@@ -282,14 +286,14 @@ static int
 brl_writeWindow (BrailleDisplay *brl, const wchar_t *text) {
   int textChanged = cellsHaveChanged(
     brl->data->text.previous, brl->buffer, brl->textColumns,
-    NULL, NULL, NULL
+    NULL, NULL, &brl->data->text.refresh
   );
 
   int statusChanged = cellsHaveChanged(
     brl->data->status.previous,
     brl->data->status.current,
     brl->statusColumns,
-    NULL, NULL, NULL
+    NULL, NULL, &brl->data->status.refresh
   );
 
   /* Only refresh display if the data has changed: */
