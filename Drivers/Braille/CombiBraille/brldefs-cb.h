@@ -22,6 +22,7 @@
 #define CB_SERIAL_BAUD 38400		/* baud rate for Braille display */
 
 typedef enum {
+  CB_PKT_KeepAlive      = 0,
   CB_PKT_DeviceIdentity = '?',
   CB_PKT_WriteCells     = 'B',
   CB_PKT_RoutingKey     = 'C',

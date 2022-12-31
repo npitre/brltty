@@ -158,6 +158,10 @@ verifyPacket (
 
     case 2:
       switch (byte) {
+        case CB_PKT_KeepAlive:
+          *length = 2;
+          return BRL_PVR_INCLUDE;
+
         case CB_PKT_DeviceIdentity:
         case CB_PKT_RoutingKey:
           *length = 3;
@@ -335,6 +339,9 @@ brl_readCommand (BrailleDisplay *brl, KeyTableCommandContext context) {
 
   while ((length = readPacket(brl, packet, sizeof(packet)))) {
     switch (packet[1]) {
+      case CB_PKT_KeepAlive:
+        continue;
+
       case CB_PKT_RoutingKey: {
         char key = packet[2];
 
