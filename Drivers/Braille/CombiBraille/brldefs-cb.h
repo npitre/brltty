@@ -29,12 +29,12 @@ typedef enum {
 } CB_PacketType;
 
 typedef enum {
-  CB_KEY_Dot6 = 0,
-  CB_KEY_Dot5,
-  CB_KEY_Dot4,
-  CB_KEY_Dot1,
+  CB_KEY_Dot3 = 0,
   CB_KEY_Dot2,
-  CB_KEY_Dot3,
+  CB_KEY_Dot1,
+  CB_KEY_Dot4,
+  CB_KEY_Dot5,
+  CB_KEY_Dot6,
 
   CB_KEY_Thumb1,
   CB_KEY_Thumb2,
