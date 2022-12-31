@@ -355,12 +355,8 @@ brl_readCommand (BrailleDisplay *brl, KeyTableCommandContext context) {
       }
 
       case CB_PKT_NavigationKeys: {
-        if (packet[2]) {
-          enqueueKeys(brl, packet[2], CB_GRP_NavigationKeys, CB_KEY_Dot6);
-        } else {
-          enqueueKeys(brl, packet[3], CB_GRP_NavigationKeys, CB_KEY_Thumb1);
-        }
-
+        KeyNumberSet keys = packet[2] | (packet[3] << 8);
+        enqueueKeys(brl, keys, CB_GRP_NavigationKeys, 0);
         continue;
       }
     }

@@ -37,13 +37,13 @@ typedef enum {
   CB_KEY_Dot5,
   CB_KEY_Dot6,
 
-  CB_KEY_Thumb1,
+  CB_KEY_Thumb1 = 8,
   CB_KEY_Thumb2,
   CB_KEY_Thumb3,
   CB_KEY_Thumb4,
   CB_KEY_Thumb5,
 
-  CB_KEY_Status1,
+  CB_KEY_Status1 = 16,
   CB_KEY_Status2,
   CB_KEY_Status3,
   CB_KEY_Status4,
