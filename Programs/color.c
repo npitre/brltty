@@ -17,7 +17,6 @@
  */
 
 #include <stdio.h>
-#include <math.h>
 #include "color.h"
 
 /* Standard VGA 16-color palette in RGB values
@@ -212,7 +211,9 @@ hsvToRgb(float h, float s, float v) {
   /* Standard HSV to RGB conversion algorithm */
   float c = v * s;  /* Chroma */
   float h_prime = h / 60.0f;
-  float x = c * (1.0f - fabsf(fmodf(h_prime, 2.0f) - 1.0f));
+  float h_mod = h_prime - 2.0f * (int)(h_prime / 2.0f);  /* h_prime mod 2.0 */
+  float x_temp = h_mod - 1.0f;
+  float x = c * (1.0f - (x_temp < 0.0f ? -x_temp : x_temp));  /* abs(h_mod - 1.0) */
   float m = v - c;
 
   float rf, gf, bf;
