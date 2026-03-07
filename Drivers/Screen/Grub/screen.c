@@ -47,6 +47,7 @@
 #include <grub/misc.h>
 
 #include "log.h"
+#include "embed.h"
 #include "scr_driver.h"
 
 /* Shadow screen dimensions. GRUB's default text mode is 80x25.
@@ -275,11 +276,34 @@ popKey (void) {
   return key;
 }
 
-/* GRUB input terminal for injected keys. */
+/* GRUB input terminal for braille key input.
+ *
+ * This is the critical integration point between GRUB and BRLTTY.
+ * GRUB's menu loop calls grub_getkey_noblock(), which iterates all
+ * registered input terminals. Our getkey() is called on each iteration,
+ * giving us the opportunity to:
+ *
+ * 1. Run one non-blocking BRLTTY poll cycle (brlttyWait with 0 timeout).
+ *    This fires expired alarms (display refresh, keepalive), processes
+ *    pending USB I/O (reading braille key events), and updates the
+ *    braille display with current shadow buffer contents.
+ *
+ * 2. Return any key that BRLTTY translated from braille input and
+ *    injected via insertKey() → pushKey(). If no key is pending,
+ *    return GRUB_TERM_NO_KEY.
+ *
+ * This cooperative polling model requires no threads or interrupts.
+ * It's the same approach BRLTTY uses on DOS. */
 static struct grub_term_input brlttyInputTerminal;
 
 static int
 brlttyInput_getkey (struct grub_term_input *term) {
+  /* Run one non-blocking BRLTTY update cycle. This polls the braille
+   * device for input, fires timer callbacks (display refresh, keepalive),
+   * and writes updated content to the braille display. The 0 timeout
+   * ensures we return immediately after one pass through the event loop. */
+  brlttyWait(0);
+
   return popKey();
 }
 
