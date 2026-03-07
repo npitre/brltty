@@ -87,25 +87,59 @@ fi
 
 echo "${programName}: building for GRUB platform: ${grubPlatform}"
 
-# Set compiler flags to match GRUB's module build environment.
+# Set compiler flags and CPU directory based on GRUB platform.
 # GRUB uses the native system GCC with -m32 or -m64 as needed.
 # No cross-compiler is required for native-architecture builds.
+#
+# The CPU determines pointer sizes and ABI — modules must match.
+# GRUB's own convention: i386-pc and i386-efi are 32-bit,
+# x86_64-efi is 64-bit.
 grubCC="${CC:-gcc}"
 grubCFLAGS=""
+grubCpuDir=""
 
 case "${grubPlatform}"
 in
    i386-*)
       grubCFLAGS="-m32"
+      grubCpuDir="i386"
       ;;
    x86_64-*)
       grubCFLAGS="-m64"
+      grubCpuDir="x86_64"
       ;;
    *)
       echo "${programName}: unsupported GRUB platform: ${grubPlatform}" >&2
       exit 1
       ;;
 esac
+
+# GRUB headers use #include <grub/cpu/types.h> where "cpu" is a symlink
+# to the target architecture directory (e.g. grub/i386 or grub/x86_64).
+# This symlink is normally created by GRUB's own configure, but since we
+# only need the headers (not a full GRUB build), we create it ourselves.
+grubRoot="${programDirectory}/grub-root"
+if [ ! -d "${grubRoot}" ]
+then
+   echo "${programName}: grub-root symlink not found." >&2
+   echo "Create it with: ln -s /path/to/grub ${grubRoot}" >&2
+   exit 1
+fi
+
+if [ ! -e "${grubRoot}/include/grub/cpu" ]
+then
+   echo "${programName}: creating grub/cpu -> grub/${grubCpuDir} symlink"
+   ln -sf "${grubCpuDir}" "${grubRoot}/include/grub/cpu"
+fi
+
+# For platform-specific headers (grub/machine), create that symlink too
+# if there's a matching platform subdirectory.
+grubMachineDir="${grubRoot}/include/grub/${grubCpuDir}/${grubPlatform#*-}"
+if [ -d "${grubMachineDir}" ] && [ ! -e "${grubRoot}/include/grub/machine" ]
+then
+   echo "${programName}: creating grub/machine -> grub/${grubCpuDir}/${grubPlatform#*-} symlink"
+   ln -sf "${grubCpuDir}/${grubPlatform#*-}" "${grubRoot}/include/grub/machine"
+fi
 
 configureOptions=(
    --enable-standalone-programs
