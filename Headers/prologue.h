@@ -214,10 +214,19 @@ ffs (int i) {
 
 /* missing needed standard integer definitions */
 #define INT16_MAX 0X7FFF
+#define UINT16_MAX 0XFFFF
 #define INT32_MAX 0X7FFFFFFF
 #define UINT32_C(i) (i)
 #define PRIuGRUB_UINT16_T "u"
 #define PRIuGRUB_UINT8_T "u"
+
+/* missing errno codes — use GRUB error codes as placeholders */
+#ifndef ENOENT
+#define ENOENT GRUB_ERR_FILE_NOT_FOUND
+#endif
+#ifndef ENOSYS
+#define ENOSYS GRUB_ERR_NOT_IMPLEMENTED_YET
+#endif
 
 /* to get gettext() declared */
 #define GRUB_POSIX_GETTEXT_DOMAIN "brltty"
@@ -226,7 +235,21 @@ ffs (int i) {
 #define NO_FLOAT
 #define float NO_FLOAT
 #define double NO_DOUBLE
-#endif /* GRUB_RUNHTIME */
+
+/* POSIX functions provided by system_grub.c — declare them here since
+ * GRUB's posix_wrap headers don't include these. Every BRLTTY source
+ * file includes prologue.h, so the declarations are always visible. */
+extern char *getenv (const char *name);
+extern void exit (int status) __attribute__((noreturn));
+extern char *strdup (const char *s);
+extern char *strtok (char *str, const char *delim);
+extern const char *strerror (int errnum);
+extern void qsort (void *base, __SIZE_TYPE__ nmemb, __SIZE_TYPE__ size,
+                   int (*compar)(const void *, const void *));
+extern void *bsearch (const void *key, const void *base,
+                      __SIZE_TYPE__ nmemb, __SIZE_TYPE__ size,
+                      int (*compar)(const void *, const void *));
+#endif /* GRUB_RUNTIME */
 
 #if defined(__MSDOS__)
 #undef WCHAR_MAX

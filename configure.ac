@@ -1189,6 +1189,9 @@ BRLTTY_ARG_PACKAGE([system], [base system], [], [dnl
       system_package="msdos"
       system_libs="-ldbg"
       ;;
+   elf*)
+      system_package="grub"
+      ;;
 ])
 
 expat_includes=""
