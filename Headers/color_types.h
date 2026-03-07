@@ -30,6 +30,7 @@ typedef struct {
   unsigned char b;  /* Blue component (0-255) */
 } RGBColor;
 
+#ifndef NO_FLOAT
 /* HSV Color Structure */
 typedef struct {
   float h;  /* Hue (0-360 degrees) */
@@ -43,6 +44,7 @@ typedef struct {
   float l;  /* Lightness (0.0-1.0) */
   float s;  /* Saturation (0.0-1.0) */
 } HLSColor;
+#endif /* NO_FLOAT */
 
 /* VGA Color Codes (0-15)
  * Standard 16-color VGA palette:

@@ -215,17 +215,72 @@ ffs (int i) {
 /* missing needed standard integer definitions */
 #define INT16_MAX 0X7FFF
 #define UINT16_MAX 0XFFFF
+#define UINT8_MAX 0XFF
 #define INT32_MAX 0X7FFFFFFF
-#define UINT32_C(i) (i)
+#define UINT16_C(i) ((uint16_t)(i))
+#define UINT32_C(i) (i ## U)
+#define UINT64_C(i) (i ## ULL)
+#define UINTMAX_C(i) (i ## ULL)
 #define PRIuGRUB_UINT16_T "u"
 #define PRIuGRUB_UINT8_T "u"
 
-/* missing errno codes — use GRUB error codes as placeholders */
+/* inttypes.h format macros — GRUB's posix_wrap inttypes.h doesn't provide these */
+#define PRId8  "d"
+#define PRIu8  "u"
+#define PRIx8  "x"
+#define PRIX8  "X"
+#define PRId16 "d"
+#define PRIu16 "u"
+#define PRIx16 "x"
+#define PRIX16 "X"
+#define PRId32 "d"
+#define PRIu32 "u"
+#define PRIx32 "x"
+#define PRIX32 "X"
+#define PRId64 "lld"
+#define PRIu64 "llu"
+#define PRIx64 "llx"
+#define PRIX64 "llX"
+#define PRIdMAX "lld"
+#define PRIuMAX "llu"
+#define PRIxMAX "llx"
+#define PRIdPTR __INTPTR_FMTd__
+#define PRIuPTR __INTPTR_FMTu__
+#define PRIxPTR __INTPTR_FMTx__
+
+/* missing errno codes — map to GRUB error codes */
 #ifndef ENOENT
 #define ENOENT GRUB_ERR_FILE_NOT_FOUND
 #endif
 #ifndef ENOSYS
 #define ENOSYS GRUB_ERR_NOT_IMPLEMENTED_YET
+#endif
+#ifndef EAGAIN
+#define EAGAIN GRUB_ERR_TIMEOUT
+#endif
+#ifndef EIO
+#define EIO GRUB_ERR_IO
+#endif
+#ifndef ENODEV
+#define ENODEV GRUB_ERR_UNKNOWN_DEVICE
+#endif
+#ifndef EBUSY
+#define EBUSY GRUB_ERR_FILE_READ_ERROR
+#endif
+#ifndef EACCES
+#define EACCES GRUB_ERR_ACCESS_DENIED
+#endif
+#ifndef EEXIST
+#define EEXIST GRUB_ERR_FILE_NOT_FOUND
+#endif
+#ifndef EINTR
+#define EINTR GRUB_ERR_TIMEOUT
+#endif
+#ifndef EROFS
+#define EROFS GRUB_ERR_ACCESS_DENIED
+#endif
+#ifndef INT16_MIN
+#define INT16_MIN (-32768)
 #endif
 
 /* to get gettext() declared */
@@ -233,12 +288,30 @@ ffs (int i) {
 
 /* disable the use of floating-point operations */
 #define NO_FLOAT
-#define float NO_FLOAT
-#define double NO_DOUBLE
 
-/* POSIX functions provided by system_grub.c — declare them here since
- * GRUB's posix_wrap headers don't include these. Every BRLTTY source
- * file includes prologue.h, so the declarations are always visible. */
+/* Types used by various BRLTTY source files */
+typedef __PTRDIFF_TYPE__ off_t;
+typedef int pid_t;
+typedef unsigned int uid_t;
+typedef unsigned int gid_t;
+typedef unsigned long ino_t;
+typedef __INTPTR_TYPE__ intptr_t;
+typedef volatile int sig_atomic_t;
+
+/* ffs — find first set bit (used by brl_dots.h) */
+#define ffs(x) __builtin_ffs(x)
+
+/* POSIX string functions not in GRUB's posix_wrap */
+extern int strncmp (const char *s1, const char *s2, __SIZE_TYPE__ n);
+extern char *strrchr (const char *s, int c);
+extern __SIZE_TYPE__ strcspn (const char *s, const char *reject);
+extern __SIZE_TYPE__ strspn (const char *s, const char *accept);
+extern int vsnprintf (char *str, __SIZE_TYPE__ size, const char *fmt, __builtin_va_list ap);
+extern char *strpbrk (const char *s, const char *accept);
+extern int strncasecmp (const char *s1, const char *s2, __SIZE_TYPE__ n);
+extern int atoi (const char *nptr);
+
+/* POSIX functions provided by system_grub.c */
 extern char *getenv (const char *name);
 extern void exit (int status) __attribute__((noreturn));
 extern char *strdup (const char *s);
@@ -249,6 +322,110 @@ extern void qsort (void *base, __SIZE_TYPE__ nmemb, __SIZE_TYPE__ size,
 extern void *bsearch (const void *key, const void *base,
                       __SIZE_TYPE__ nmemb, __SIZE_TYPE__ size,
                       int (*compar)(const void *, const void *));
+
+/* I/O stubs — GRUB's posix_wrap stdio.h defines FILE but not these */
+typedef struct grub_file *FILE_ptr;
+extern int fclose (FILE_ptr stream);
+extern FILE_ptr fopen (const char *path, const char *mode);
+extern __SIZE_TYPE__ fread (void *ptr, __SIZE_TYPE__ size, __SIZE_TYPE__ nmemb, FILE_ptr stream);
+extern __SIZE_TYPE__ fwrite (const void *ptr, __SIZE_TYPE__ size, __SIZE_TYPE__ nmemb, FILE_ptr stream);
+extern int fprintf (FILE_ptr stream, const char *fmt, ...) __attribute__((format(__printf__, 2, 3)));
+extern int feof (FILE_ptr stream);
+extern int ferror (FILE_ptr stream);
+extern int fflush (FILE_ptr stream);
+extern int fgetc (FILE_ptr stream);
+extern char *fgets (char *s, int size, FILE_ptr stream);
+extern int fputs (const char *s, FILE_ptr stream);
+extern int fputc (int c, FILE_ptr stream);
+extern int fileno (FILE_ptr stream);
+
+/* Standard streams — defined in system_grub.c */
+extern FILE_ptr stdin;
+extern FILE_ptr stdout;
+extern FILE_ptr stderr;
+
+/* POSIX I/O */
+extern int close (int fd);
+extern __PTRDIFF_TYPE__ write (int fd, const void *buf, __SIZE_TYPE__ count);
+extern __PTRDIFF_TYPE__ read (int fd, void *buf, __SIZE_TYPE__ count);
+
+/* Time functions — stubs in system_grub.c */
+typedef long time_t;
+extern time_t time (time_t *tloc);
+
+/* Command-line parsing stubs */
+extern int getopt (int argc, char *const argv[], const char *optstring);
+extern char *optarg;
+extern int optind, opterr, optopt;
+
+/* Locale stubs */
+#define LC_ALL 0
+#define LC_CTYPE 0
+extern char *setlocale (int category, const char *locale);
+
+/* Additional POSIX stubs */
+extern int vprintf (const char *fmt, __builtin_va_list ap);
+extern void srand (unsigned int seed);
+extern int unlink (const char *path);
+extern int rename (const char *oldpath, const char *newpath);
+extern int pipe (int pipefd[2]);
+extern FILE_ptr fdopen (int fd, const char *mode);
+extern FILE_ptr freopen (const char *path, const char *mode, FILE_ptr stream);
+
+/* Constants */
+#define STDIN_FILENO 0
+#define STDOUT_FILENO 1
+#define STDERR_FILENO 2
+
+/* stdio buffering constants */
+#define _IONBF 2
+#define _IOLBF 1
+#define _IOFBF 0
+extern int setvbuf (FILE_ptr stream, char *buf, int mode, __SIZE_TYPE__ size);
+
+/* select() stubs — GRUB has no fd multiplexing */
+typedef struct { unsigned long fds_bits[1]; } fd_set;
+#define FD_ZERO(set) ((set)->fds_bits[0] = 0)
+#define FD_SET(fd, set) ((set)->fds_bits[0] |= (1UL << (fd)))
+#define FD_CLR(fd, set) ((set)->fds_bits[0] &= ~(1UL << (fd)))
+#define FD_ISSET(fd, set) ((set)->fds_bits[0] & (1UL << (fd)))
+struct timeval;
+extern int select (int nfds, fd_set *r, fd_set *w, fd_set *e, struct timeval *t);
+#ifndef UINT32_MAX
+#define UINT32_MAX 0XFFFFFFFFU
+#endif
+#ifndef EPIPE
+#define EPIPE GRUB_ERR_IO
+#endif
+typedef unsigned long dev_t;
+
+/* Format macros that depend on __INTPTR_FMTd__ */
+#ifndef __INTPTR_FMTd__
+#define PRIdPTR "ld"
+#undef PRIuPTR
+#define PRIuPTR "lu"
+#undef PRIxPTR
+#define PRIxPTR "lx"
+#endif
+#define PRIXPTR PRIxPTR
+#define PRIi32 "d"
+
+/* GRUB's ARRAY_SIZE takes 1 argument (element count of a static array),
+ * BRLTTY's takes 2 arguments (byte size = count * sizeof(*pointer)).
+ * Use a variadic macro to support both calling conventions, since GRUB
+ * headers may be included later and use the 1-arg form. */
+#undef ARRAY_SIZE
+#define ARRAY_SIZE_1(array) (sizeof(array) / sizeof((array)[0]))
+#define ARRAY_SIZE_2(pointer, count) ((count) * sizeof(*(pointer)))
+#define ARRAY_SIZE_SELECT(_1, _2, NAME, ...) NAME
+#define ARRAY_SIZE(...) ARRAY_SIZE_SELECT(__VA_ARGS__, ARRAY_SIZE_2, ARRAY_SIZE_1)(__VA_ARGS__)
+
+/* GRUB's posix_wrap provides wchar.h but configure's test may fail
+ * in the freestanding environment. Force HAVE_WCHAR_H so prologue.h
+ * includes wchar.h instead of defining wcs* as conflicting macros. */
+#ifndef HAVE_WCHAR_H
+#define HAVE_WCHAR_H 1
+#endif
 #endif /* GRUB_RUNTIME */
 
 #if defined(__MSDOS__)
@@ -257,6 +434,12 @@ extern void *bsearch (const void *key, const void *base,
 #elif defined(HAVE_WCHAR_H)
 #include <wchar.h>
 #include <wctype.h>
+/* GRUB's wchar.h doesn't define WCHAR_MAX — ensure it's set so
+ * the #ifdef WCHAR_MAX block below is entered instead of the
+ * #else block which would redefine mbrtowc/wcrtomb as stubs. */
+#if defined(GRUB_RUNTIME) && !defined(WCHAR_MAX)
+#define WCHAR_MAX 0x7FFFFFFF
+#endif
 #endif /* HAVE_WCHAR_H */
 
 #ifdef __MSDOS__
@@ -353,6 +536,101 @@ WIN_ERRNO_STORAGE_CLASS int win_toErrno (DWORD error);
 #define PRIwc "lc"
 #define PRIws "ls"
 #define iswLatin1(wc) ((wc) < 0X100)
+
+#ifdef GRUB_RUNTIME
+/* GRUB's wchar.h provides mbrtowc/wcrtomb/wcscoll but not the
+ * full set of wide-char functions. Provide simple versions that
+ * handle ASCII/Latin-1 (sufficient for GRUB's use case). */
+#include <string.h>
+#include <ctype.h>
+
+#define WEOF ((wint_t)-1)
+
+#define iswcntrl(wc) iscntrl((int)(wc))
+#define iswalpha(wc) isalpha((int)(wc))
+#define iswdigit(wc) isdigit((int)(wc))
+#define iswalnum(wc) isalnum((int)(wc))
+#define iswgraph(wc) isgraph((int)(wc))
+#define iswlower(wc) islower((int)(wc))
+#define iswprint(wc) isprint((int)(wc))
+#define iswpunct(wc) ispunct((int)(wc))
+#define iswspace(wc) isspace((int)(wc))
+#define iswupper(wc) isupper((int)(wc))
+#define iswxdigit(wc) isxdigit((int)(wc))
+
+#define towlower(wc) tolower((int)(wc))
+#define towupper(wc) toupper((int)(wc))
+
+static inline size_t wcslen (const wchar_t *s) {
+  size_t n = 0; while (s[n]) n++; return n;
+}
+static inline wchar_t *wmemcpy (wchar_t *d, const wchar_t *s, size_t n) {
+  size_t i; for (i = 0; i < n; i++) d[i] = s[i]; return d;
+}
+static inline wchar_t *wmemmove (wchar_t *d, const wchar_t *s, size_t n) {
+  if (d < s) { size_t i; for (i = 0; i < n; i++) d[i] = s[i]; }
+  else if (d > s) { size_t i = n; while (i--) d[i] = s[i]; }
+  return d;
+}
+static inline wchar_t *wmemset (wchar_t *s, wchar_t c, size_t n) {
+  size_t i; for (i = 0; i < n; i++) s[i] = c; return s;
+}
+static inline int wmemcmp (const wchar_t *s1, const wchar_t *s2, size_t n) {
+  size_t i; for (i = 0; i < n; i++) {
+    if (s1[i] != s2[i]) return (s1[i] < s2[i]) ? -1 : 1;
+  }
+  return 0;
+}
+static inline wchar_t *wmemchr (const wchar_t *s, wchar_t c, size_t n) {
+  size_t i; for (i = 0; i < n; i++) if (s[i] == c) return (wchar_t *)(s + i);
+  return 0;
+}
+static inline int wcsncmp (const wchar_t *s1, const wchar_t *s2, size_t n) {
+  size_t i; for (i = 0; i < n && s1[i] && s2[i]; i++) {
+    if (s1[i] != s2[i]) return (s1[i] < s2[i]) ? -1 : 1;
+  }
+  if (i == n) return 0;
+  return (s1[i] < s2[i]) ? -1 : (s1[i] > s2[i]) ? 1 : 0;
+}
+static inline wchar_t *wcschr (const wchar_t *s, wchar_t c) {
+  while (*s) { if (*s == c) return (wchar_t *)s; s++; }
+  return (c == 0) ? (wchar_t *)s : 0;
+}
+static inline wchar_t *wcsrchr (const wchar_t *s, wchar_t c) {
+  const wchar_t *last = 0;
+  while (*s) { if (*s == c) last = s; s++; }
+  return (wchar_t *)((c == 0) ? s : last);
+}
+static inline wchar_t *wcscpy (wchar_t *d, const wchar_t *s) {
+  wchar_t *r = d; while ((*d++ = *s++)); return r;
+}
+static inline wchar_t *wcsncpy (wchar_t *d, const wchar_t *s, size_t n) {
+  size_t i; for (i = 0; i < n && s[i]; i++) d[i] = s[i];
+  for (; i < n; i++) d[i] = 0;
+  return d;
+}
+static inline wchar_t *wcstok (wchar_t *s, const wchar_t *d, wchar_t **p) {
+  if (s) *p = s;
+  if (!*p) return 0;
+  wchar_t *start = *p;
+  while (*start && wcschr(d, *start)) start++;
+  if (!*start) { *p = 0; return 0; }
+  wchar_t *end = start;
+  while (*end && !wcschr(d, *end)) end++;
+  if (*end) { *end = 0; *p = end + 1; } else *p = 0;
+  return start;
+}
+static inline int swprintf (wchar_t *s, size_t n, const wchar_t *fmt, ...) {
+  if (n > 0) s[0] = 0;
+  (void)fmt;
+  return 0;
+}
+static inline wint_t fgetwc (void *stream) {
+  (void)stream;
+  return WEOF;
+}
+#endif /* GRUB_RUNTIME */
+
 #else /* HAVE_WCHAR_H */
 #include <string.h>
 #include <ctype.h>
@@ -534,9 +812,10 @@ extern char *ngettext (
 /* some headers exist but probably shouldn't */
 #undef HAVE_SIGNAL_H
 
-/* including <time.h> on its own yields compile errors */
+/* localtime_r doesn't exist in GRUB — let timing.c define an inline
+ * wrapper around our localtime() stub. */
 #undef HAVE_DECL_LOCALTIME_R
-#define HAVE_DECL_LOCALTIME_R 1
+#define HAVE_DECL_LOCALTIME_R 0
 
 /* AC_CHECK_FUNC() is checking local libraries - these are the errors that matter */
 #undef HAVE_FCHDIR

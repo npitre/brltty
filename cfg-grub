@@ -149,12 +149,20 @@ configureOptions=(
    --enable-standalone-programs
 
    --disable-api
+   --disable-expat
    --disable-icu
    --disable-gpm
    --disable-polkit
    --disable-x
 
    --without-libbraille
+   --without-pgmpath-package
+   --without-service-package
+   --without-params-package
+   --without-rgx-package
+   --without-hostcmd-package
+   --without-mntpt-package
+   --without-mntfs-package
 
    # All braille drivers must be built-in (internal) because GRUB has no
    # shared library loader. List desired drivers without a '-' prefix,
@@ -179,7 +187,7 @@ configureOptions=(
    --host=i386-elf
    CC="${grubCC}"
    CPP="${grubCC} -E"
-   CFLAGS="${grubCFLAGS}"
+   CFLAGS="${grubCFLAGS} -Wno-incompatible-pointer-types"
    LD=ld
    STRIP=strip
    RANLIB=ranlib

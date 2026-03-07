@@ -64,6 +64,13 @@ typedef struct {
 
 #endif /* monitor definitions */
 
+#ifndef ASYNC_CAN_MONITOR_IO
+/* GRUB and other minimal platforms: no I/O monitoring */
+typedef struct {
+  int dummy;
+} MonitorEntry;
+#endif
+
 #include "log.h"
 #include "async_io.h"
 #include "async_internal.h"

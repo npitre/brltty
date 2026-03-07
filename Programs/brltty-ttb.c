@@ -36,7 +36,7 @@
 #include "ttb_compile.h"
 
 #undef HAVE_UNDEFINED_CHARACTERS_SUPPORT
-#if defined(__linux__)
+#if defined(__linux__) && !defined(GRUB_RUNTIME)
 #define HAVE_UNDEFINED_CHARACTERS_SUPPORT
 
 #include <fcntl.h>

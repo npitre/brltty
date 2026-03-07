@@ -41,6 +41,10 @@ extern int rgbColorToVga (RGBColor color, int noBrightBit);
  */
 extern const RGBColor *vgaColorPalette (void);
 
+/* Convert ANSI 256-color code to RGB */
+extern RGBColor ansiToRgb (unsigned int code);
+
+#ifndef NO_FLOAT
 /* Convert RGB to HSV color space */
 extern HSVColor rgbToHsv (unsigned char r, unsigned char g, unsigned char b);
 
@@ -70,12 +74,14 @@ extern RGBColor hlsToRgb(float h, float l, float s);
 
 /* Convert HLS color structure to RGB */
 extern RGBColor hlsColorToRgb(HLSColor hls);
+#endif /* NO_FLOAT */
 
 /* Get the color name for a VGA color code (0-15)
  * Returns a static string with the color name (e.g., "Red", "Light Blue")
  */
 extern const char *vgaColorName (int vga);
 
+#ifndef NO_FLOAT
 /* Return the name of the color for the specified grayscale brightness */
 extern const char *gsColorName(float brightness);
 
@@ -136,14 +142,12 @@ extern const char *hlsToName(char *buffer, size_t bufferSize, float h, float l, 
  */
 extern const char *hlsColorToName(char *buffer, size_t bufferSize, HLSColor hls);
 
-/* Convert ANSI 256-color code to RGB */
-extern RGBColor ansiToRgb (unsigned int code);
-
 /* Interpolate between two HSV colors */
 extern HSVColor hsvColorInterpolate (HSVColor hsv1, HSVColor hsv2, float factor);
 
 /* Interpolate between two RGB colors using HSV */
 extern RGBColor rgbColorInterpolate (RGBColor rgb1, RGBColor rgb2, float factor);
+#endif /* NO_FLOAT */
 
 #ifdef __cplusplus
 }

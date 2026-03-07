@@ -23,6 +23,7 @@
 extern "C" {
 #endif /* __cplusplus */
 
+#ifndef NO_FLOAT
 typedef struct {
   float minimum;
   float maximum;
@@ -44,6 +45,7 @@ extern const size_t hsvColorCount;
 extern const HSVColorEntry *hsvColorEntry (HSVColor hsv);
 
 extern unsigned char useHSVColorSorting;
+#endif /* NO_FLOAT */
 
 #ifdef __cplusplus
 }

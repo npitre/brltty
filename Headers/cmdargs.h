@@ -38,10 +38,12 @@ extern int checkNoMoreArguments (CommandArguments *arguments);
 extern int verifyNoMoreArguments (CommandArguments *arguments);
 
 extern int parseInteger (int *value, const char *argument, int minimum, int maximum, const char *name);
-extern int parseFloat (float *value, const char *argument, float minimum, float maximum, int inclusive, const char *name);
 
+#ifndef NO_FLOAT
+extern int parseFloat (float *value, const char *argument, float minimum, float maximum, int inclusive, const char *name);
 extern int parseDegrees (float *degrees, const char *argument, const char *name);
 extern int parsePercent (float *value, const char *argument, const char *name);
+#endif /* NO_FLOAT */
 
 extern void beginInteractiveMode (void);
 extern void endInteractiveMode (void);

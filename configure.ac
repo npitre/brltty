@@ -295,6 +295,11 @@ in
       brltty_include_directory=`$CC -print-file-name=include`
       brltty_gcc_cppflags="${brltty_gcc_cppflags} -isystem $brltty_include_directory"
       brltty_gcc_cppflags="${brltty_gcc_cppflags} -I$brltty_grub_root -I$brltty_grub_root/grub-core/lib/posix_wrap -I$brltty_grub_root/include"
+
+      dnl BRLTTY-specific POSIX stub headers for functions/types that
+      dnl GRUB's posix_wrap does not provide (fcntl.h, signal.h, time.h, etc.)
+      dnl These come last so GRUB's own headers take priority.
+      brltty_gcc_cppflags="${brltty_gcc_cppflags} -I`pwd`/Headers/grub"
       ;;
 esac
 

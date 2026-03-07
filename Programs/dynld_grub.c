@@ -32,14 +32,12 @@ unloadSharedObject (void *object) {
   grub_dl_unload(object);
 }
 
-int 
+int
 findSharedSymbol (void *object, const char *symbol, void *pointerAddress) {
-  void **address = pointerAddress;
-  grub_symbol_t sym = grub_get_symbol(symbol, object);
-
-  if (!sym) return 0;
-  *address = sym->addr;
-  return 1;
+  /* GRUB has no public symbol lookup API. All drivers are compiled
+   * as built-in (internal), so dynamic symbol resolution is not needed. */
+  (void)object; (void)symbol; (void)pointerAddress;
+  return 0;
 }
 
 const char *

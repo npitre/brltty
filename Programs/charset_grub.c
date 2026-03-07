@@ -19,6 +19,7 @@
 #include "prologue.h"
 
 #include <locale.h>
+#include <langinfo.h>
 #include <wchar.h>
 
 #include "charset_internal.h"

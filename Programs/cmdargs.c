@@ -112,6 +112,7 @@ parseInteger (int *value, const char *argument, int minimum, int maximum, const 
   return 0;
 }
 
+#ifndef NO_FLOAT
 int
 parseFloat (float *value, const char *argument, float minimum, float maximum, int inclusive, const char *name) {
   if (validateFloat(value, argument, &minimum, &maximum)) {
@@ -141,6 +142,7 @@ parsePercent (float *value, const char *argument, const char *name) {
   *value /= maximum;
   return 1;
 }
+#endif /* NO_FLOAT */
 
 void
 beginInteractiveMode (void) {

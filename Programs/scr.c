@@ -78,6 +78,7 @@ STR_BEGIN_FORMATTER(formatScreenColor, const ScreenColor *color)
   const char *styleNames[8];
   unsigned int styleCount = 0;
 
+#ifndef NO_FLOAT
   if (color->usingRGB) {
     ColorNameBuffer foreground;
     rgbColorToName(foreground, sizeof(foreground), color->foreground);
@@ -91,7 +92,9 @@ STR_BEGIN_FORMATTER(formatScreenColor, const ScreenColor *color)
     if (color->isItalic) styleNames[styleCount++] = "italic";
     if (color->hasUnderline) styleNames[styleCount++] = "underline";
     if (color->hasStrikeThrough) styleNames[styleCount++] = "strike";
-  } else {
+  } else
+#endif /* NO_FLOAT */
+  {
     unsigned char attributes = color->vgaAttributes;
     const char *foreground = vgaColorName(vgaGetForegroundColor(attributes));
     const char *background = vgaColorName(vgaGetBackgroundColor(attributes));

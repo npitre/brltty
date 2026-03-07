@@ -530,63 +530,137 @@ GRUB provides partial POSIX compatibility through its `posix_wrap` directory
 `errno.h`, `wchar.h`, `wctype.h`, `unistd.h`, `assert.h`, `locale.h`,
 `inttypes.h`.
 
-### 7.2 Missing Headers
+### 7.2 Stub Headers (`Headers/grub/`)
 
-The following standard headers are not provided by GRUB's `posix_wrap`
-and are included by BRLTTY core files:
+The `Headers/grub/` directory provides POSIX-compatible stub headers for
+headers not covered by GRUB's `posix_wrap`. These are found via `-I../Headers`
+in the include path:
 
-| Header | Used by | Required for |
-|--------|---------|-------------|
-| `signal.h` | `brltty.c` | Signal handlers (not relevant in GRUB) |
-| `time.h` | `core.c`, `timing_types.h` | `struct timespec` (BRLTTY has GRUB alternatives) |
-| `fcntl.h` | `program.c`, `messages.c`, `log.c` | File operations (not relevant in GRUB) |
+| Header | Provides |
+|--------|----------|
+| `Headers/grub/time.h` | `time_t`, `struct timespec`, `struct timeval`, `struct tm`; chains to GRUB's real `grub/time.h` via relative path |
+| `Headers/grub/signal.h` | Empty stub (types moved to `prologue.h` to avoid conflicts) |
+| `Headers/grub/fcntl.h` | `O_RDONLY`, `O_WRONLY`, `O_RDWR`, `O_CREAT`, `O_TRUNC`; `open()` stub |
+| `Headers/grub/termios.h` | `struct termios`, flag constants (`ECHO`, `ICANON`, etc.), `tcgetattr`/`tcsetattr` stubs |
+| `Headers/grub/strings.h` | Empty stub (functions declared in `prologue.h`) |
+| `Headers/grub/sys/stat.h` | `struct stat` with `st_dev`, `st_ino`, `st_mode`, `st_size`; `stat()`/`fstat()` stubs |
+| `Headers/grub/sys/ioctl.h` | `TIOCGWINSZ`, `struct winsize`, `ioctl()` stub |
+| `Headers/grub/search.h` | `hsearch`/`hcreate`/`hdestroy` stubs |
 
-### 7.3 Missing Functions
+**Header shadowing caveat**: `-I../Headers` causes `#include <grub/time.h>`
+to find our stub before GRUB's real `grub/time.h`. The stub chains to the
+real header via relative path: `#include "../../grub-root/include/grub/time.h"`.
+`#include_next` was tried but failed ("No such file or directory") because
+the real header isn't on the same include path.
 
-GRUB's `posix_wrap` headers declare some POSIX functions but not all that
-BRLTTY uses. Functions missing at compile time:
+### 7.3 System Package (`Programs/system_grub.c`)
 
-| Category | Functions | Used by |
-|----------|-----------|---------|
-| File I/O | `fopen`, `fclose`, `fflush`, `fwrite`, `fputs`, `fputc`, `ferror` | `cmdline.c`, `cmdput.c` |
-| stdio | `stdin`, `stdout`, `vprintf` | `cmdput.c`, `cmdline.c` |
-| String | `strdup`, `strtok`, `strerror` | `cmdline.c`, `cmdargs.c` |
-| Search | `qsort`, `bsearch` | `cmdline.c` |
-| Environment | `getenv` | `cmdline.c` (map to `grub_env_get`, Section 6.4) |
-| Option parsing | `getopt`, `optarg`, `optind`, `opterr`, `optopt` | `cmdline.c` |
-| Process | `exit` | `cmdbase.c`, `cmdput.c` |
-| Error codes | `ENOENT`, `ENOSYS` | `cmdline.c`, `pid.c` |
-| Integer limits | `UINT16_MAX` | `cmdput.c` |
+All POSIX function implementations live in `Programs/system_grub.c`, which
+maps standard C functions to GRUB equivalents:
 
-### 7.4 Macro Conflicts
+| Category | Functions | Implementation |
+|----------|-----------|----------------|
+| String | `strdup`, `strtok`, `strerror`, `strncmp`, `strrchr`, `strcspn`, `strspn`, `strpbrk`, `strncasecmp` | Native implementations using `grub_*` primitives |
+| stdio (FILE) | `fopen`, `fclose`, `fread`, `fwrite`, `fprintf`, `feof`, `ferror`, `fflush`, `fgetc`, `fgets`, `fputs`, `fputc`, `fileno` | `fopen` → `grub_file_open`, `fread` → `grub_file_read`, stdout/stderr → `grub_printf` |
+| stdio (fd) | `close`, `write`, `read` | fd 1/2 → `grub_printf`, others return -1 |
+| Formatting | `vsnprintf`, `vprintf`, `atoi` | Delegate to `grub_vsnprintf` / `grub_strtol` |
+| Sorting | `qsort`, `bsearch` | Shell sort and binary search implementations |
+| Time | `time`, `localtime`, `gmtime`, `strftime` | `time` → `grub_get_time_ms()/1000`, others are minimal stubs |
+| Environment | `getenv` | → `grub_env_get()` |
+| Process | `exit` | → `grub_fatal()` |
+| Option parsing | `getopt` (+ `optarg`, `optind`, `opterr`, `optopt` globals) | Returns -1 (GRUB uses `grub_register_command`) |
+| Locale | `setlocale` | Returns `"C"` |
+| Stubs | `srand`, `unlink`, `rename`, `pipe`, `fdopen`, `freopen`, `setvbuf`, `select` | No-op or return -1 |
 
-- `ARRAY_SIZE` — both GRUB (`grub/misc.h`) and BRLTTY define this macro
-  with different signatures. Needs conditional definition.
+Globals: `stdin = NULL`, `stdout = NULL`, `stderr = NULL` — console output
+is detected by checking for these sentinel values.
 
-### 7.5 Resolution Strategy
+### 7.4 Prologue Declarations (`Headers/prologue.h` GRUB_RUNTIME block)
 
-These issues fall into three categories:
+The `GRUB_RUNTIME` block in `prologue.h` (the universal header included by
+every `.c` file) provides:
 
-**Dead code paths** — Functions used in code paths that have no meaning in
-a bootloader: `stdin`/`stdout` processing, environment variables (`getenv`),
-process control (`exit`). These should be guarded with `#ifndef GRUB_RUNTIME`
-to compile them out.
+- **Types**: `intptr_t`, `ino_t`, `dev_t`, `sig_atomic_t`, `off_t`, `pid_t`,
+  `uid_t`, `gid_t`, `FILE_ptr` typedef, `fd_set`
+- **Format macros**: `PRId8` through `PRIxPTR`, `PRIXPTR`, `PRIi32`
+- **Errno codes**: `EAGAIN`, `EIO`, `ENODEV`, `EBUSY`, `EACCES`, `EEXIST`,
+  `EINTR`, `EROFS`, `EPIPE` (supplementing GRUB's `EINVAL`/`ENOMEM`/`ENOENT`)
+- **Limits**: `UINT16_C`, `INT16_MIN`, `UINT32_MAX`
+- **Constants**: `STDIN_FILENO`/`STDOUT_FILENO`/`STDERR_FILENO`,
+  `_IONBF`/`_IOLBF`/`_IOFBF`, `LC_ALL`/`LC_CTYPE`
+- **Macros**: `FD_ZERO`/`FD_SET`/`FD_CLR`/`FD_ISSET`, `ffs()` → `__builtin_ffs()`
+- **Function declarations**: All functions implemented in `system_grub.c`
+- **Feature guards**: `#undef HAVE_SIGNAL_H`, `#undef HAVE_FCHDIR`,
+  `#undef HAVE_SELECT`, `HAVE_DECL_LOCALTIME_R 0`
+- **Wide-char functions**: `wcslen`, `wmemcpy`, `wmemmove`, `wmemset`,
+  `wmemcmp`, `wmemchr`, `wcsncmp`, `wcschr`, `wcsrchr`, `wcscpy`, `wcsncpy`,
+  `wcstok`, `swprintf`, `fgetwc`, and `isw*`/`tow*` macros (GRUB's `wchar.h`
+  provides `mbrtowc`/`wcrtomb` but not these)
 
-**GRUB-replaceable code paths** — File I/O (`fopen`/`fread`/`fclose`) and
-configuration file parsing are needed in GRUB but must use GRUB's own file
-API (Section 6). These need `#ifdef GRUB_RUNTIME` alternative implementations
-that call `grub_file_open()` / `grub_file_read()` / `grub_file_close()`.
-Similarly, `exit()` maps to `grub_fatal()`, and `strerror()` can map to
-`grub_errmsg`.
+### 7.5 ARRAY_SIZE Conflict Resolution
 
-**Missing stubs** — Functions that are referenced but never actually called
-at runtime (e.g., in unreachable branches after `#ifdef` simplification)
-may need trivial stub definitions to satisfy the linker.
+GRUB defines `ARRAY_SIZE(array)` as a 1-argument macro returning the element
+count. BRLTTY uses `ARRAY_SIZE(pointer, count)` as a 2-argument macro
+returning the byte size. Since both forms appear in the same compilation
+units (GRUB headers are included via `posix_wrap`), a variadic dispatch
+macro handles both:
 
-The preferred approach is `#ifdef GRUB_RUNTIME` guards in the BRLTTY source,
-keeping changes minimal and localized. BRLTTY already uses this pattern
-extensively in `Programs/timing.c`, `Programs/file.c`, `Programs/pid.c`,
-`Programs/program.c`, `Programs/config.c`, and `Programs/serial.c`.
+```c
+#undef ARRAY_SIZE
+#define ARRAY_SIZE_1(array) (sizeof(array) / sizeof((array)[0]))
+#define ARRAY_SIZE_2(pointer, count) ((count) * sizeof(*(pointer)))
+#define ARRAY_SIZE_SELECT(_1, _2, NAME, ...) NAME
+#define ARRAY_SIZE(...) ARRAY_SIZE_SELECT(__VA_ARGS__, ARRAY_SIZE_2, ARRAY_SIZE_1)(__VA_ARGS__)
+```
+
+### 7.6 NO_FLOAT — Floating-Point Exclusion
+
+GRUB forbids FPU use: the bootloader does not save/restore FPU state across
+context switches, does not guarantee FPU initialization, and does not link
+a soft-float library. All floating-point code must be compiled out.
+
+BRLTTY uses `#define NO_FLOAT` (set in the `GRUB_RUNTIME` block of
+`prologue.h`) with `#ifndef NO_FLOAT` guards in:
+
+| File | Guarded content |
+|------|-----------------|
+| `Headers/color_types.h` | `HSVColor`, `HLSColor` struct definitions |
+| `Headers/color.h` | All float-using color functions (`rgbToHsv`, `hsvToRgb`, etc.) |
+| `Headers/cmdargs.h` | `parseFloat`, `parseDegrees`, `parsePercent` |
+| `Programs/color.c` | Float-based color conversion implementations |
+| `Programs/color_internal.h` | `HSVComponentRange`, `HSVColorEntry` |
+| `Programs/cmdargs.c` | Float parsing implementations |
+| `Programs/scr.c` | RGB color name path (VGA path remains available) |
+
+GRUB's native color model is VGA 16-color (single byte: bits 3:0 = foreground,
+bits 6:4 = background). BRLTTY's `vgaColorName()` provides integer-only
+name lookup, so float math is not needed for color naming in GRUB.
+
+### 7.7 HAVE_WCHAR_H / WCHAR_MAX Forcing
+
+GRUB's `posix_wrap` includes `wchar.h` (providing `mbrtowc`, `wcrtomb`,
+`mbsinit`, `wcscoll`), but `configure` cannot detect it in freestanding
+mode. Two defines are forced in `prologue.h`:
+
+1. `HAVE_WCHAR_H` — forced in the first `GRUB_RUNTIME` block (before the
+   `#ifdef HAVE_WCHAR_H` decision point that controls wchar inclusion)
+2. `WCHAR_MAX` — forced immediately after `wchar.h` inclusion (GRUB's
+   `wchar.h` doesn't define it, but BRLTTY's `prologue.h` uses it to
+   gate wide-character code paths)
+
+### 7.8 Other Build Compatibility Fixes
+
+- **strtol/strtoul API mismatch**: GRUB declares `const char **end` vs
+  standard C's `char **end`. Suppressed with `-Wno-incompatible-pointer-types`
+  in `cfg-grub`.
+- **`__linux__` in freestanding mode**: GCC always defines `__linux__` on Linux
+  hosts, even with `-ffreestanding`. `Programs/brltty-ttb.c` guards
+  `linux/kd.h` inclusion with `&& !defined(GRUB_RUNTIME)`.
+- **`MonitorEntry` typedef**: `Programs/async_io.c` has conditional typedefs
+  for MinGW/poll/select platforms. Added `#ifndef ASYNC_CAN_MONITOR_IO`
+  fallback stub for GRUB.
+- **Dynamic symbol lookup**: `Programs/dynld_grub.c`'s `findSharedSymbol()`
+  stubbed to return 0 — all drivers are internal, no shared library loading.
 
 
 ## 8. Implementation Status
@@ -620,7 +694,23 @@ extensively in `Programs/timing.c`, `Programs/file.c`, `Programs/pid.c`,
   `Documents/README.Grub` (build instructions),
   `Documents/GRUB-Module-Design.md` (this document)
 
+- **POSIX compatibility layer** (Section 7) —
+  All BRLTTY core source files compile cleanly (0 errors, 0 warnings) under
+  GRUB's freestanding environment. Implemented via:
+  - `Headers/grub/` stub headers (time.h, signal.h, fcntl.h, termios.h, etc.)
+  - `Programs/system_grub.c` (30+ POSIX function implementations)
+  - `Headers/prologue.h` GRUB_RUNTIME block (types, macros, declarations,
+    wide-char functions)
+  - `NO_FLOAT` guards in color/cmdargs code
+  - Variadic `ARRAY_SIZE` macro for GRUB/BRLTTY compatibility
+
 ### Remaining Work
+
+- **Build `.mod` file** — Build system changes to produce a GRUB `.mod` file
+  instead of a standalone executable. The `genmod.sh` post-processing step
+  (adding `.modname`/`.moddeps` sections, stripping symbols) needs
+  finalization. Currently reaches the link stage with only expected GRUB
+  runtime symbol references unresolved.
 
 - **Command-based entry point** (Section 5.4) — Update `Programs/grub_module.c`
   to register a `brltty` GRUB command via `grub_register_command()` instead of
@@ -633,15 +723,7 @@ extensively in `Programs/timing.c`, `Programs/file.c`, `Programs/pid.c`,
   `grub_file_read()` / `grub_file_close()`. This enables loading `brltty.conf`,
   key tables, and text tables from disk.
 
-- **POSIX compatibility** (Section 7) — Add `#ifdef GRUB_RUNTIME` guards
-  to core source files to compile out POSIX-dependent code paths that are
-  not relevant in GRUB. This is the primary blocker for a successful build.
-
 - **Testing** — Verify in QEMU with USB passthrough and on real hardware.
-
-- **Makefile `brltty.mod` target** — The `genmod.sh` post-processing step
-  (adding `.modname`/`.moddeps` sections, stripping symbols) needs
-  finalization.
 
 
 ## 9. Key Source Files Reference
@@ -652,12 +734,21 @@ extensively in `Programs/timing.c`, `Programs/file.c`, `Programs/pid.c`,
 |------|------|
 | `cfg-grub` | Build configuration script |
 | `configure.ac` (lines 283-298) | GRUB platform detection, compiler flags |
-| `Headers/prologue.h` (lines 509-521) | `GRUB_RUNTIME` conditional fixes |
+| `Headers/prologue.h` | `GRUB_RUNTIME` block: types, macros, declarations, wide-char functions |
+| `Headers/grub/time.h` | POSIX time types + chain to GRUB's real `grub/time.h` |
+| `Headers/grub/signal.h` | Empty stub (types in prologue.h) |
+| `Headers/grub/fcntl.h` | File control constants and `open()` stub |
+| `Headers/grub/termios.h` | Terminal I/O types and stubs |
+| `Headers/grub/strings.h` | Empty stub (functions in prologue.h) |
+| `Headers/grub/search.h` | Hash table stubs |
+| `Headers/grub/sys/stat.h` | `struct stat` and stubs |
+| `Headers/grub/sys/ioctl.h` | `TIOCGWINSZ`, `struct winsize` |
+| `Programs/system_grub.c` | POSIX function implementations (30+ functions) |
 | `Programs/grub_module.c` | GRUB module entry point |
 | `Programs/serial_grub.c` | Serial I/O via GRUB serial API |
 | `Programs/serial_grub.h` | GRUB serial type mappings |
 | `Programs/usb_grub.c` | USB backend via GRUB USB API |
-| `Programs/dynld_grub.c` | Dynamic loading |
+| `Programs/dynld_grub.c` | Dynamic loading (stubbed — all drivers internal) |
 | `Programs/ports_grub.c` | I/O port access |
 | `Programs/charset_grub.c` | Character set handling |
 | `Programs/timing.c` | GRUB time functions (`grub_get_time_ms`, etc.) |

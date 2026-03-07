@@ -157,6 +157,7 @@ vgaColorName(int vga) {
   return vgaColorNames[vga];
 }
 
+#ifndef NO_FLOAT
 HSVColor
 rgbToHsv(unsigned char r, unsigned char g, unsigned char b) {
   HSVColor hsv;
@@ -1275,3 +1276,4 @@ RGBColor
 rgbColorInterpolate (RGBColor rgb1, RGBColor rgb2, float factor) {
   return hsvColorToRgb(hsvColorInterpolate(rgbColorToHsv(rgb1), rgbColorToHsv(rgb2), factor));
 }
+#endif /* NO_FLOAT */
