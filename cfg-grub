@@ -34,6 +34,8 @@ END-OF-HELP
 # xw (by --disable-x)
 
 configureOptions=(
+   --enable-standalone-programs
+
    --disable-api
    --disable-icu
    --disable-gpm
@@ -41,9 +43,16 @@ configureOptions=(
    --disable-x
 
    --without-libbraille
-   --with-braille-driver=-lt,-tt,-vd
+
+   # All braille drivers must be built-in (internal) because GRUB has no
+   # shared library loader. List desired drivers without a '-' prefix,
+   # and end with '-all' to exclude the rest. Included here are drivers
+   # that support USB and/or serial — the only transports available in GRUB.
+   --with-braille-driver=al,at,bm,bn,cb,ce,cn,dp,eu,fa,fs,hd,hm,ht,hw,ic,ir,md,mm,mn,mt,np,pg,pm,sk,ts,vo,-all
 
    --disable-speech-support
+
+   --with-screen-driver=gb,-all
 
    --without-bell-package
    --without-leds-package
