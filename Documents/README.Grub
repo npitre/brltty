@@ -1,0 +1,113 @@
+Braille Support for the GRUB Boot Loader
+==========================================
+
+BRLTTY can run as a loadable GRUB module, providing braille display
+accessibility during the boot menu. This allows blind users to read
+and navigate the GRUB menu using a refreshable braille display.
+
+Supported Braille Displays
+--------------------------
+
+All USB braille displays supported by BRLTTY should work. The braille display
+must be connected through a USB 2.0 port (UHCI, OHCI, or EHCI controller).
+USB 3.0 (xHCI) controllers are not currently supported by GRUB's USB stack.
+
+Serial-attached braille displays are also supported via GRUB's serial port
+driver.
+
+Bluetooth braille displays are not supported — GRUB has no Bluetooth stack.
+
+Speech output is not available — GRUB has no audio subsystem.
+
+Building
+--------
+
+The module must be built against the GRUB source tree. There is no
+``grub-devel`` package providing the required headers.
+
+1. Obtain the GRUB source::
+
+      git clone https://git.savannah.gnu.org/git/grub.git /path/to/grub
+
+   Alternatively, use your distribution's GRUB source::
+
+      dnf download --source grub2        # Fedora/RHEL
+      apt-get source grub2               # Debian/Ubuntu
+
+2. Create a symlink named ``grub-root`` in the BRLTTY source root pointing to
+   the GRUB source tree::
+
+      cd /path/to/brltty
+      ln -s /path/to/grub grub-root
+
+3. Configure the build::
+
+      ./cfg-grub
+
+   Additional configure options may be passed through::
+
+      ./cfg-grub --with-braille-driver=hw
+
+4. Build::
+
+      make
+
+Installation
+------------
+
+1. Copy ``brltty.mod`` to the GRUB modules directory::
+
+      # EFI systems:
+      cp brltty.mod /boot/grub/x86_64-efi/
+
+      # Legacy BIOS systems:
+      cp brltty.mod /boot/grub/i386-pc/
+
+2. To load the module automatically at every boot, add the following to
+   ``/etc/default/grub``::
+
+      GRUB_PRELOAD_MODULES="usb uhci ohci ehci brltty"
+
+   Then regenerate the GRUB configuration::
+
+      grub-mkconfig -o /boot/grub/grub.cfg
+
+   On some distributions this is done with::
+
+      update-grub
+
+Loading Manually
+----------------
+
+From the GRUB command line, load the USB stack and then the BRLTTY module::
+
+   grub> insmod usb
+   grub> insmod uhci
+   grub> insmod ohci
+   grub> insmod ehci
+   grub> insmod brltty
+
+For serial-attached displays, load the serial module instead::
+
+   grub> insmod serial
+   grub> insmod brltty
+
+Troubleshooting
+---------------
+
+Display not detected
+   Ensure the USB modules are loaded before ``brltty.mod``. The display must
+   be plugged in before loading the module.
+
+Only some USB ports work
+   GRUB's USB stack supports UHCI, OHCI, and EHCI controllers only. Try
+   different USB ports — many systems have a mix of USB 2.0 and 3.0 ports.
+
+Limitations
+-----------
+
+* Bluetooth is not supported.
+* Speech is not supported.
+* USB 3.0 (xHCI) host controllers are not supported by GRUB.
+* The module must be compiled from source against a GRUB source tree that
+  matches (or is close to) the installed GRUB version.
