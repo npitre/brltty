@@ -484,14 +484,35 @@ Alternatively, paths can be specified as arguments to the `brltty` command:
 brltty -f (hd0,gpt2)/etc/brltty.conf
 ```
 
-### 6.4 What Cannot Be Loaded
+### 6.4 Environment Variables
+
+BRLTTY reads configuration from environment variables named
+`BRLTTY_<OPTION>` (e.g., `BRLTTY_BRAILLE_DRIVER`, `BRLTTY_TEXT_TABLE`).
+Under Linux, these are standard environment variables read via `getenv()`.
+
+GRUB has its own environment accessible via `grub_env_get()` /
+`grub_env_set()`. Under `GRUB_RUNTIME`, BRLTTY's `getenv()` calls can
+map directly to `grub_env_get()`, making the same variable names work:
+
+```
+# In grub.cfg:
+set BRLTTY_BRAILLE_DRIVER=hw
+set BRLTTY_TEXT_TABLE=en_US
+insmod brltty
+brltty
+```
+
+This is implemented by providing a `getenv()` wrapper under `GRUB_RUNTIME`
+that calls `grub_env_get()`. The variable name convention is preserved —
+no GRUB-specific renaming is needed.
+
+### 6.5 What Cannot Work
 
 Some BRLTTY features inherently require a hosted OS and should be compiled
 out under `GRUB_RUNTIME`:
 
-- Configuration from environment variables (`getenv`)
 - Standard input processing (`stdin`)
-- Preferences file writing
+- Preferences file writing (GRUB's file API is read-only)
 - Locale and internationalization
 
 
@@ -531,7 +552,7 @@ BRLTTY uses. Functions missing at compile time:
 | stdio | `stdin`, `stdout`, `vprintf` | `cmdput.c`, `cmdline.c` |
 | String | `strdup`, `strtok`, `strerror` | `cmdline.c`, `cmdargs.c` |
 | Search | `qsort`, `bsearch` | `cmdline.c` |
-| Environment | `getenv` | `cmdline.c` |
+| Environment | `getenv` | `cmdline.c` (map to `grub_env_get`, Section 6.4) |
 | Option parsing | `getopt`, `optarg`, `optind`, `opterr`, `optopt` | `cmdline.c` |
 | Process | `exit` | `cmdbase.c`, `cmdput.c` |
 | Error codes | `ENOENT`, `ENOSYS` | `cmdline.c`, `pid.c` |
