@@ -53,12 +53,16 @@ END-OF-HELP
 #   x86_64-efi    — 64-bit UEFI (64-bit modules)
 #   i386-efi      — 32-bit UEFI (32-bit modules)
 grubPlatform=""
+configureArgs=()
 for option
 do
    case "${option}"
    in
       --with-grub-platform=*)
          grubPlatform="${option#*=}"
+         ;;
+      *)
+         configureArgs+=("${option}")
          ;;
    esac
 done
@@ -174,11 +178,12 @@ configureOptions=(
    # is used instead of looking for i386-elf-* cross tools.
    --host=i386-elf
    CC="${grubCC}"
+   CPP="${grubCC} -E"
    CFLAGS="${grubCFLAGS}"
    LD=ld
    STRIP=strip
    RANLIB=ranlib
 )
 
-"${programDirectory}/configure" --quiet "${configureOptions[@]}" "${@}"
+"${programDirectory}/configure" --quiet "${configureOptions[@]}" "${configureArgs[@]}"
 exit "${?}"

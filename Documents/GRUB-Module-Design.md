@@ -9,31 +9,22 @@ boot menu, distributable by distros without patching GRUB.
 
 ### 1.1 Current State
 
-BRLTTY has partial GRUB support consisting of 6 source files:
+BRLTTY has partial GRUB support consisting of platform backend files and a build
+configuration script:
 
-| File | Purpose |
-|------|---------|
-| `Programs/serial_grub.c` | Serial port I/O via GRUB's serial API |
-| `Programs/serial_grub.h` | Type mappings (BRLTTY types to GRUB types) |
-| `Programs/usb_grub.c` | USB stub — all functions return "unsupported" |
-| `Programs/dynld_grub.c` | Dynamic loading via GRUB's `grub_dl_*` functions |
-| `Programs/ports_grub.c` | I/O port access via `grub_inb`/`grub_outb` |
-| `Programs/charset_grub.c` | Minimal character set handling |
-| `cfg-grub` | Build configuration wrapper script |
-
-Additionally, `Drivers/Screen/Grub/screen.c` exists but is an empty skeleton.
-
-Key problems with the current approach:
-
-- **Not a loadable module**: compiled as a standalone i386-elf binary with
-  `--host=i386-elf -ffreestanding -nostdinc -nostdlib`. No `GRUB_MOD_INIT`/
-  `GRUB_MOD_FINI` entry points. Must be linked into a custom GRUB build.
-- **USB completely stubbed out**: `usb_grub.c` returns "unsupported" for every
-  function, making all USB braille displays non-functional.
-- **Screen driver is empty**: `Drivers/Screen/Grub/screen.c` only calls
-  `initializeRealScreen()` with no actual implementation.
-- **No documentation**: no build instructions, no integration guide.
-- **Limited drivers**: only serial braille drivers (`lt`, `tt`, `vd`) enabled.
+| File | Purpose | Status |
+|------|---------|--------|
+| `Programs/serial_grub.c` | Serial port I/O via GRUB's serial API | Pre-existing |
+| `Programs/serial_grub.h` | Type mappings (BRLTTY types to GRUB types) | Pre-existing |
+| `Programs/usb_grub.c` | USB backend via GRUB's USB API | Implemented |
+| `Programs/dynld_grub.c` | Dynamic loading via GRUB's `grub_dl_*` functions | Pre-existing |
+| `Programs/ports_grub.c` | I/O port access via `grub_inb`/`grub_outb` | Pre-existing |
+| `Programs/charset_grub.c` | Minimal character set handling | Pre-existing |
+| `Programs/grub_module.c` | GRUB module entry point (`GRUB_MOD_INIT`/`FINI`) | Implemented |
+| `Programs/timing.c` | Time/timer support (GRUB paths) | Pre-existing |
+| `Drivers/Screen/Grub/screen.c` | Screen driver with shadow terminal | Implemented |
+| `cfg-grub` | Build configuration wrapper script | Updated |
+| `configure.ac` | GRUB platform detection, compiler flags | Updated |
 
 ### 1.2 Target Architecture
 
@@ -100,17 +91,75 @@ GRUB_MOD_FINI(brltty)
 
 ### 2.2 Build Requirements
 
-There is no `grub-devel` package. Modules must be built against the GRUB source
-tree. Two approaches:
+There is no `grub-devel` package. Modules must be built against a **configured**
+GRUB source tree. The GRUB source must have `./configure` run (but not
+necessarily `make`) to generate:
 
-1. **In-tree**: add module to `grub-core/Makefile.core.def`, run
-   `./autogen.sh && ./configure && make`
-2. **Out-of-tree**: compile with GRUB source headers on the include path, using
-   the same compiler flags GRUB uses (from its `config.h` and build system)
+- `config.h` — included by `grub/types.h`
+- `include/grub/cpu` symlink — points to the target CPU's header directory
+  (e.g., `grub/x86_64` or `grub/i386`)
+- `include/grub/machine` symlink — points to the platform-specific headers
+  (e.g., `grub/x86_64/efi`)
 
 The GRUB source can be obtained from:
 - `git clone https://git.savannah.gnu.org/git/grub.git`
 - Or via distro SRPM: `dnf download --source grub2`
+
+See `Documents/README.Grub` for detailed build instructions.
+
+### 2.3 Module Build Process
+
+GRUB modules go through a multi-step build:
+
+1. **Compile** — Source files are compiled with `-ffreestanding -nostdinc
+   -nostdlib` plus GRUB header include paths. The native system GCC is used
+   with `-m32` (for `i386-pc`/`i386-efi`) or `-m64` (for `x86_64-efi`).
+   No cross-compiler is required.
+
+2. **Link** — Object files are linked with `-nostdlib -Wl,-r` into a
+   relocatable ELF object (`.module`).
+
+3. **Post-process** — GRUB's `genmod.sh` adds `.modname` and `.moddeps`
+   ELF sections, then strips to keep only `grub_mod_init` and
+   `grub_mod_fini` symbols, producing the final `.mod`.
+
+### 2.4 Compiler Flags
+
+The `elf*` host case in `configure.ac` sets:
+
+```
+CPPFLAGS += -DGRUB_RUNTIME -DGRUB_FILE=__FILE__ -DNESTED_FUNC_ATTR=
+            -ffreestanding -nostdinc -nostdlib
+            -isystem $(gcc -print-file-name=include)
+            -I grub-root/grub-core/lib/posix_wrap
+            -I grub-root/include
+```
+
+Key points:
+- `-nostdinc` removes all default system include paths
+- `-isystem` adds back GCC's own built-in headers (`stdint.h`, `stddef.h`, etc.)
+- GRUB's `posix_wrap` directory provides minimal POSIX header stubs
+  (`limits.h`, `string.h`, `stdlib.h`, etc.)
+- GRUB's `include` directory provides the GRUB API headers
+- `-DGRUB_RUNTIME` gates GRUB-specific code paths throughout BRLTTY
+
+### 2.5 Platform Configuration
+
+The `cfg-grub` script handles platform selection:
+
+- **Auto-detection**: scans `/boot/grub*/` for platform directories
+- **Explicit override**: `--with-grub-platform=x86_64-efi` (or `i386-pc`,
+  `i386-efi`)
+- Distro packagers should always specify the platform explicitly, since they
+  build for multiple targets
+
+The platform determines:
+- Compiler flags: `-m64` for `x86_64-*`, `-m32` for `i386-*`
+- Which GRUB headers are used (pointer sizes, ABI)
+
+All braille drivers are built as internal (statically linked) because GRUB
+has no shared library loader. The `--enable-standalone-programs` flag
+prevents any attempt to load `.so` files at runtime.
 
 
 ## 3. Screen Capture — Shadow Terminal
@@ -148,6 +197,10 @@ codepoint. Cursor movement is already resolved into explicit `gotoxy()` calls.
 
 ### 3.3 Shadow Terminal Implementation
 
+The shadow terminal (`Drivers/Screen/Grub/screen.c`) maintains a buffer of
+`ShadowCell` structures (character + VGA color attribute) indexed by row and
+column:
+
 ```
 shadow_putchar(glyph):
     buffer[cursor_y][cursor_x] = { .character = glyph->base, .color = current_color }
@@ -163,16 +216,17 @@ shadow_cls():
     forward to real_term->cls()
 
 shadow_setcolorstate(state):
-    current_color = state
+    current_color = state (mapped to VGA attribute byte)
     forward to real_term->setcolorstate(state)
 
 shadow_getwh() / shadow_getxy() / shadow_refresh():
     forward to real_term
 ```
 
-This is architecturally similar to `screen(1)` or `tmux` — it sits between GRUB
-and the real terminal, maintaining its own screen buffer. BRLTTY already has a
-tmux screen driver (`Drivers/Screen/TerminalEmulator/`) using the same concept.
+On `construct()`, the driver removes the real terminal from GRUB's active
+output list, inserts the shadow terminal wrapper in its place, and registers
+a `brltty_keys` input terminal. On `destruct()`, it restores the original
+terminal.
 
 ### 3.4 BRLTTY Screen Driver
 
@@ -182,41 +236,39 @@ tmux screen driver (`Drivers/Screen/TerminalEmulator/`) using the same concept.
 |-------------------|----------------|
 | `describe()` | Return rows/cols from `shadow_getwh()`, cursor from shadow state |
 | `readCharacters()` | Copy from shadow buffer into `ScreenCharacter` array |
-| `insertKey()` | Inject key into GRUB's input queue |
+| `insertKey()` | Push key into ring buffer, returned by `getkey()` |
 | `poll()` | Always returns 1 (content changes on every GRUB output) |
 | `currentVirtualTerminal()` | Returns 1 (single screen) |
 
 
 ## 4. USB Braille Device Support
 
-### 4.1 Current State
+### 4.1 Implementation
 
-`Programs/usb_grub.c` stubs out all 17 platform USB functions with
-`logUnsupportedFunction()`. This is the only file that needs implementation to
-enable USB braille displays.
+`Programs/usb_grub.c` implements BRLTTY's platform USB functions using GRUB's
+USB API. This enables all USB braille displays that BRLTTY supports.
 
 ### 4.2 BRLTTY's USB I/O Stack
 
-The full call chain on Linux is:
+The full call chain:
 
 ```
 Braille driver (e.g. HumanWare)
-  → writeBraillePacket() / readBraillePacket()      Programs/brl_base.c
-    → gioWriteData() / gioReadByte()                 Programs/gio.c
-      → writeUsbData() / readUsbData()               Programs/gio_usb.c
-        → usbWriteData() / usbReadData()             Programs/usb.c
-          → usbWriteEndpoint() / usbReadEndpoint()   Programs/usb_linux.c
-            → ioctl(USBDEVFS_BULK)                    Linux kernel
+  -> writeBraillePacket() / readBraillePacket()      Programs/brl_base.c
+    -> gioWriteData() / gioReadByte()                 Programs/gio.c
+      -> writeUsbData() / readUsbData()               Programs/gio_usb.c
+        -> usbWriteData() / usbReadData()             Programs/usb.c
+          -> usbWriteEndpoint() / usbReadEndpoint()   Programs/usb_grub.c
+            -> grub_usb_bulk_read/write()              GRUB USB API
 ```
 
-Everything above `usb_grub.c` is platform-independent. Implementing this one
-file enables **all 134 USB braille devices** that BRLTTY supports.
+Everything above `usb_grub.c` is platform-independent.
 
 ### 4.3 Function Mapping: usb_grub.c to GRUB API
 
 | usb_grub.c function | GRUB API | Notes |
 |----------------------|----------|-------|
-| `usbFindDevice()` | `grub_usb_iterate()` + descriptor match | Core enumeration. Walk GRUB's USB devices, match vendor/product from BRLTTY's `UsbChannelDefinition` tables |
+| `usbFindDevice()` | `grub_usb_iterate()` + descriptor match | Core enumeration |
 | `usbSetConfiguration()` | `grub_usb_set_configuration()` | Direct mapping |
 | `usbClaimInterface()` | No-op | No competing drivers in GRUB |
 | `usbReleaseInterface()` | No-op | |
@@ -252,85 +304,10 @@ GRUB already has a full USB stack:
 | FTDI USB-serial | `grub-core/bus/usb/serial/ftdi.c` |
 | PL2303 USB-serial | `grub-core/bus/usb/serial/pl2303.c` |
 
-The USB API provides:
-- `grub_usb_iterate()` — enumerate all connected devices
-- `grub_usb_device_initialize()` — read device descriptors
-- `grub_usb_set_configuration()` — select configuration
-- `grub_usb_bulk_read()` / `grub_usb_bulk_write()` — data transfer
-- `grub_usb_bulk_read_extended()` — with timeout
-- `grub_usb_bulk_read_background()` / `grub_usb_check_transfer()` — async
-- `grub_usb_control_msg()` — control transfers
-- `grub_usb_clear_halt()` — endpoint reset
-- `grub_usb_register_attach_hook_class()` — hotplug notification
 
-### 4.5 USB Braille Device Landscape
+## 5. Event Loop and Timing
 
-From BRLTTY's `Programs/usb_devices.c` (134 total device entries):
-
-| USB Vendor ID | Count | Manufacturer | Transport type |
-|---------------|-------|--------------|----------------|
-| `0x0904` | 35 | Baum | Raw USB bulk endpoints |
-| `0x1FE4` | 25 | HandyTech | HID or FTDI (`0x0403`) |
-| `0xC251` | 17 | EuroBraille | Raw USB bulk endpoints |
-| `0x1C71` | 15 | HumanWare | Raw USB bulk or HID |
-| `0x0403` | 13 | FTDI chip | USB-serial (FTDI) |
-| `0x0798` | 5 | Alva | Raw USB bulk endpoints |
-| Others | 24 | Various | Mixed |
-
-FTDI-based devices (`0x0403`) could work through GRUB's existing
-`usbserial_ftdi.mod` + BRLTTY's `serial_grub.c` without any USB implementation
-work. The rest require the `usb_grub.c` implementation.
-
-
-## 5. Target Device: HumanWare Brailliant BI 40
-
-### 5.1 USB Details
-
-- **Vendor:Product** — `1C71:C005`
-- **Driver** — `hw` (HumanWare), `Drivers/Braille/HumanWare/braille.c`
-- **Protocol** — HumanWare serial protocol over USB bulk endpoints
-- **Configuration** — 1, **Interface** — 1, **Alternative** — 0
-- **Input endpoint** — 2 (bulk), **Output endpoint** — 3 (bulk)
-- **Serial parameters** — 115200 baud, 8 bits, even parity
-
-### 5.2 Protocol
-
-The HumanWare serial protocol uses ESC-framed packets:
-
-```
-Byte 0: ESC (0x1B)
-Byte 1: message type
-Byte 2: payload length
-Byte 3+: payload data
-```
-
-Key message types:
-- `HW_MSG_INIT` — initialize / identify device
-- `HW_MSG_INIT_RESP` — response with model ID + cell count
-- `HW_MSG_DISPLAY` — write cells to braille display
-- `HW_MSG_KEYS` / `HW_MSG_KEY_DOWN` / `HW_MSG_KEY_UP` — key events
-- `HW_MSG_KEEP_AWAKE` — keepalive ping
-- `HW_MSG_GET_FIRMWARE_VERSION` — query firmware
-
-### 5.3 Device Identification
-
-On USB enumeration, the HumanWare driver matches vendor/product ID `1C71:C005`,
-opens configuration 1 / interface 1, and sends `HW_MSG_INIT`. The device
-responds with its model identifier and cell count (40 for the BI 40). The driver
-then selects the appropriate key table (`KEY_TABLE_DEFINITION(BI40)`).
-
-### 5.4 Newer Models
-
-The Brailliant BI 40X (`1C71:C131`) uses HID protocol instead of the serial
-protocol. It communicates via HID reports (`HW_REP_OUT_WriteCells`,
-`HW_REP_IN_PressedKeys`, `HW_REP_FTR_Capabilities`, etc.) over USB bulk
-endpoints. The same `usb_grub.c` implementation would support both protocols
-since BRLTTY handles the protocol difference at the driver level.
-
-
-## 6. Event Loop and Timing
-
-### 6.1 GRUB's Execution Model
+### 5.1 GRUB's Execution Model
 
 GRUB is single-threaded with a cooperative polling loop. The menu loop
 (`grub-core/normal/menu.c:run_menu`) is:
@@ -347,123 +324,181 @@ while (1) {
 calling each one's `getkey()` method. Returns `GRUB_TERM_NO_KEY` if nothing
 available.
 
-### 6.2 BRLTTY's Async Framework
+### 5.2 BRLTTY's Async Framework
 
 BRLTTY's main wait loop (`Programs/async_wait.c:asyncAwaitCondition`) does:
 
 1. **Check alarms** — fire any expired timer callbacks
 2. **Check tasks** — run pending task callbacks
 3. **Check I/O** — poll for input with remaining timeout
-4. If nothing happened → `approximateDelay(timeout)` (calls `grub_millisleep()`
+4. If nothing happened -> `approximateDelay(timeout)` (calls `grub_millisleep()`
    on GRUB)
 
 All timing uses `grub_get_time_ms()` — already implemented in
 `Programs/timing.c` for the GRUB platform.
 
-### 6.3 Integration: BRLTTY as a Terminal Input Driver
+### 5.3 Integration: BRLTTY Poll via getkey()
 
-Register a `grub_term_input` whose `getkey()` method:
+The screen driver registers a `grub_term_input` whose `getkey()` method
+drives BRLTTY's event loop:
 
-1. Polls the braille device USB endpoint with a short timeout (~10ms)
-2. Runs one iteration of BRLTTY's update cycle:
-   - Process any braille key events
-   - Fire expired timer callbacks (keepalive, etc.)
-   - Update the braille display if screen content changed
-3. If a braille key maps to a GRUB action, return the GRUB keycode
-4. Otherwise return `GRUB_TERM_NO_KEY`
+```c
+static int
+brlttyInput_getkey (struct grub_term_input *term) {
+  brlttyWait(0);    // one non-blocking pass: fire alarms, poll I/O
+  return popKey();  // return injected key or GRUB_TERM_NO_KEY
+}
+```
+
+`brlttyWait(0)` performs one non-blocking iteration through the async
+framework — firing expired alarms (display refresh, keepalive), processing
+pending USB I/O, and returning immediately. This is the same cooperative
+polling approach used on DOS.
 
 ```
 GRUB menu loop
-  → grub_getkey_noblock()
-    → keyboard terminal getkey()       → poll keyboard
-    → serial terminal getkey()         → poll serial
-    → brltty terminal getkey()         → NEW
-        → poll braille USB input (short timeout)
-        → fire expired BRLTTY alarms (keepalive, etc.)
-        → update braille display with shadow buffer content
-        → translate braille keys → GRUB keycodes
-        → return key or GRUB_TERM_NO_KEY
+  -> grub_getkey_noblock()
+    -> keyboard terminal getkey()       -> poll keyboard
+    -> serial terminal getkey()         -> poll serial
+    -> brltty terminal getkey()
+        -> brlttyWait(0)
+            -> fire expired alarms (display refresh, keepalive)
+            -> poll braille USB input
+            -> update braille display with shadow buffer content
+        -> popKey()
+            -> return injected GRUB keycode or GRUB_TERM_NO_KEY
 ```
 
-This requires no threads, no interrupts, no signal handlers. BRLTTY's async
-framework already supports this model — it's the same approach used on DOS.
+### 5.4 Module Entry Point
+
+`Programs/grub_module.c` provides the GRUB module hooks:
+
+```c
+GRUB_MOD_INIT(brltty)
+{
+  brlttyConstruct(argc, argv);  // argv = {"brltty", "-q", "-n"}
+}
+
+GRUB_MOD_FINI(brltty)
+{
+  brlttyDestruct();
+}
+```
+
+`brlttyConstruct()` initializes the BRLTTY core, which loads the screen driver
+(triggering shadow terminal installation) and probes for braille devices.
+`brlttyDestruct()` shuts everything down and restores the original terminal.
 
 
-## 7. Implementation Plan
+## 6. Freestanding Environment — POSIX Compatibility
 
-### Phase 1: GRUB Module Skeleton
+### 6.1 The Problem
 
-Create a minimal `.mod` that loads in GRUB.
+BRLTTY's core source files assume a POSIX hosted environment. Under GRUB's
+freestanding build (`-ffreestanding -nostdinc -nostdlib`), many standard
+headers and library functions are unavailable.
 
-- Add `GRUB_MOD_INIT(brltty)` / `GRUB_MOD_FINI(brltty)` entry points
-- Register a `grub_register_command("brltty", ...)` that prints a status message
-- Set up the build infrastructure (in-tree `Makefile.core.def` entry or
-  out-of-tree build recipe)
-- Verify: `insmod brltty` works at the GRUB command line
+GRUB provides partial POSIX compatibility through its `posix_wrap` directory
+(`grub-core/lib/posix_wrap/`), which supplies minimal versions of:
+`limits.h`, `string.h`, `stdlib.h`, `stdint.h`, `stdio.h`, `ctype.h`,
+`errno.h`, `wchar.h`, `wctype.h`, `unistd.h`, `assert.h`, `locale.h`,
+`inttypes.h`.
 
-No braille hardware needed. Testable in QEMU.
+### 6.2 Missing Headers
 
-### Phase 2: Screen Capture (Shadow Terminal)
+The following standard headers are not provided by GRUB's `posix_wrap`
+and are included by BRLTTY core files:
 
-Implement the terminal output wrapper.
+| Header | Used by | Required for |
+|--------|---------|-------------|
+| `signal.h` | `brltty.c` | Signal handlers (not relevant in GRUB) |
+| `time.h` | `core.c`, `timing_types.h` | `struct timespec` (BRLTTY has GRUB alternatives) |
+| `fcntl.h` | `program.c`, `messages.c`, `log.c` | File operations (not relevant in GRUB) |
 
-- Intercept `putchar`/`gotoxy`/`cls`/`setcolorstate` on the active terminal
-- Maintain a shadow text buffer (columns x rows, character + attribute)
-- Register a `brltty_screen` debug command that dumps the buffer contents
-- Verify: boot to GRUB menu, `insmod brltty`, confirm shadow buffer matches
-  visible screen
+### 6.3 Missing Functions
 
-No braille hardware needed. Testable in QEMU.
+GRUB's `posix_wrap` headers declare some POSIX functions but not all that
+BRLTTY uses. Functions missing at compile time:
 
-### Phase 3: USB Backend
+| Category | Functions | Used by |
+|----------|-----------|---------|
+| File I/O | `fopen`, `fclose`, `fflush`, `fwrite`, `fputs`, `fputc`, `ferror` | `cmdline.c`, `cmdput.c` |
+| stdio | `stdin`, `stdout`, `vprintf` | `cmdput.c`, `cmdline.c` |
+| String | `strdup`, `strtok`, `strerror` | `cmdline.c`, `cmdargs.c` |
+| Search | `qsort`, `bsearch` | `cmdline.c` |
+| Environment | `getenv` | `cmdline.c` |
+| Option parsing | `getopt`, `optarg`, `optind`, `opterr`, `optopt` | `cmdline.c` |
+| Process | `exit` | `cmdbase.c`, `cmdput.c` |
+| Error codes | `ENOENT`, `ENOSYS` | `cmdline.c`, `pid.c` |
+| Integer limits | `UINT16_MAX` | `cmdput.c` |
 
-Implement `usb_grub.c` against GRUB's USB API.
+### 6.4 Macro Conflicts
 
-Priority order:
-1. `usbFindDevice()` — enumerate via `grub_usb_iterate()`, match vendor/product
-2. `usbSetConfiguration()` / `usbClaimInterface()` / `usbReleaseInterface()`
-3. `usbReadEndpoint()` / `usbWriteEndpoint()` — bulk transfers
-4. `usbControlTransfer()` — device setup
-5. `usbClearHalt()` / `usbReadDeviceDescriptor()`
-6. Remaining functions as no-ops or trivial implementations
+- `ARRAY_SIZE` — both GRUB (`grub/misc.h`) and BRLTTY define this macro
+  with different signatures. Needs conditional definition.
 
-Verify: BRLTTY's USB channel matching finds device `1C71:C005`.
+### 6.5 Resolution Strategy
 
-Benefits from QEMU USB passthrough or emulated USB devices.
+These issues fall into two categories:
 
-### Phase 4: Braille Display I/O
+**Dead code paths** — Many of the missing functions are used in code paths
+that will never execute under GRUB (config file parsing, stdin processing,
+environment variables, option parsing with `getopt`). These can be guarded
+with `#ifndef GRUB_RUNTIME` to compile them out.
 
-Connect BRLTTY's braille driver stack to the USB backend.
+**Missing stubs** — Functions that are called from code paths that do
+execute under GRUB need either:
+- GRUB-specific implementations (e.g., `exit()` -> `grub_fatal()`)
+- Stub implementations that satisfy the linker
+- Additional `posix_wrap`-style headers in BRLTTY's own tree
 
-- BRLTTY's GIO/USB stack should now work end-to-end
-- The HumanWare driver sends `HW_MSG_INIT`, gets cell count, writes cells
-- Verify: text appears on the Brailliant BI 40
+The preferred approach is `#ifdef GRUB_RUNTIME` guards in the BRLTTY source,
+keeping changes minimal and localized. BRLTTY already uses this pattern
+extensively in `Programs/timing.c`.
 
-Requires real hardware (or QEMU USB passthrough to the device).
 
-### Phase 5: Input Integration
+## 7. Implementation Status
 
-Register a `grub_term_input` for braille key input.
+### Completed
 
-- Implement the `getkey()` poll method described in Section 6.3
-- Map braille key presses to GRUB keycodes (arrows, enter, escape)
-- Fire BRLTTY timer callbacks during each poll cycle
-- Verify: navigate the GRUB menu using the braille display
+- **Module entry point** (`Programs/grub_module.c`) —
+  `GRUB_MOD_INIT`/`GRUB_MOD_FINI` calling `brlttyConstruct()`/`brlttyDestruct()`
 
-### Phase 6: BRLTTY Screen Driver
+- **Screen driver** (`Drivers/Screen/Grub/screen.c`) —
+  Shadow terminal buffer, terminal output wrapper (putchar/gotoxy/cls/
+  setcolorstate), key injection ring buffer, BRLTTY-to-GRUB key translation,
+  `brlttyWait(0)` integration in `getkey()`
 
-Replace the empty `Drivers/Screen/Grub/screen.c`.
+- **USB backend** (`Programs/usb_grub.c`) —
+  Full implementation mapping BRLTTY's USB functions to GRUB's USB API
 
-- Implement `describe()` — rows, cols, cursor from shadow terminal state
-- Implement `readCharacters()` — copy from shadow buffer
-- Implement `insertKey()` — inject into GRUB's input queue
-- This enables BRLTTY's full navigation, cursor routing, and command processing
+- **Build configuration** (`cfg-grub`) —
+  Platform auto-detection and explicit override (`--with-grub-platform=`),
+  native GCC toolchain with `-m32`/`-m64`, all tools overridden to avoid
+  cross-compiler requirement, all drivers built as internal
 
-### Testing Strategy
+- **Build system** (`configure.ac`) —
+  Corrected include path ordering (`-nostdinc` before `-isystem`/`-I`),
+  GRUB root and posix_wrap include paths
 
-- Phases 1-2: QEMU with standard GRUB, no special hardware
-- Phase 3: QEMU with USB passthrough (`-device usb-host,vendorid=0x1c71,productid=0xc005`) or emulated USB
-- Phases 4-6: Real hardware or QEMU USB passthrough to Brailliant BI 40
+- **Makefile rules** (`Programs/Makefile.in`) —
+  `brltty.module` and `brltty.mod` build targets
+
+- **Documentation** —
+  `Documents/README.Grub` (build instructions),
+  `Documents/GRUB-Module-Design.md` (this document)
+
+### Remaining Work
+
+- **POSIX compatibility** (Section 6) — Add `#ifdef GRUB_RUNTIME` guards
+  to core source files to compile out POSIX-dependent code paths that are
+  not relevant in GRUB. This is the primary blocker for a successful build.
+
+- **Testing** — Verify in QEMU with USB passthrough and on real hardware.
+
+- **Makefile `brltty.mod` target** — The `genmod.sh` post-processing step
+  (adding `.modname`/`.moddeps` sections, stripping symbols) needs
+  finalization.
 
 
 ## 8. Key Source Files Reference
@@ -473,23 +508,23 @@ Replace the empty `Drivers/Screen/Grub/screen.c`.
 | File | Role |
 |------|------|
 | `cfg-grub` | Build configuration script |
-| `configure.ac` (lines 283-295) | GRUB platform detection, compiler flags |
+| `configure.ac` (lines 283-298) | GRUB platform detection, compiler flags |
 | `Headers/prologue.h` (lines 509-521) | `GRUB_RUNTIME` conditional fixes |
+| `Programs/grub_module.c` | GRUB module entry point |
 | `Programs/serial_grub.c` | Serial I/O via GRUB serial API |
 | `Programs/serial_grub.h` | GRUB serial type mappings |
-| `Programs/usb_grub.c` | USB stub (to be implemented) |
+| `Programs/usb_grub.c` | USB backend via GRUB USB API |
 | `Programs/dynld_grub.c` | Dynamic loading |
 | `Programs/ports_grub.c` | I/O port access |
 | `Programs/charset_grub.c` | Character set handling |
-| `Programs/timing.c` (lines 60-70, 297-300, 374-375) | GRUB time functions |
+| `Programs/timing.c` | GRUB time functions (`grub_get_time_ms`, etc.) |
 | `Programs/usb.c` | Platform-independent USB layer |
-| `Programs/usb_devices.c` | USB vendor/product ID database (134 devices) |
+| `Programs/usb_devices.c` | USB vendor/product ID database |
 | `Programs/gio.c` / `Programs/gio_usb.c` | Generic I/O abstraction |
 | `Programs/brl_base.c` | Braille packet read/write |
 | `Programs/async_wait.c` | Async event loop |
 | `Programs/core.c` | Main update cycle |
-| `Drivers/Braille/HumanWare/braille.c` | HumanWare driver (BI 40) |
-| `Drivers/Screen/Grub/screen.c` | Screen driver (empty skeleton) |
+| `Drivers/Screen/Grub/screen.c` | Screen driver with shadow terminal |
 
 ### GRUB source tree
 
@@ -503,11 +538,11 @@ Replace the empty `Drivers/Screen/Grub/screen.c`.
 | `include/grub/dl.h` | Module loading API |
 | `include/grub/command.h` | Command registration |
 | `include/grub/mm.h` | Memory management |
+| `grub-core/lib/posix_wrap/` | Minimal POSIX header stubs |
 | `grub-core/term/gfxterm.c` | Graphics terminal (has private `virtual_screen`) |
-| `grub-core/term/i386/pc/vga_text.c` | VGA text terminal (reads/writes `0xB8000`) |
+| `grub-core/term/i386/pc/vga_text.c` | VGA text terminal |
 | `grub-core/term/i386/pc/console.c` | BIOS console terminal |
 | `grub-core/kern/term.c` | `grub_getkey`, terminal iteration |
 | `grub-core/bus/usb/usb.c` | USB core framework |
-| `grub-core/bus/usb/serial/ftdi.c` | FTDI USB-serial driver (example module) |
-| `grub-core/bus/usb/serial/common.c` | USB-serial common code |
+| `grub-core/bus/usb/serial/ftdi.c` | FTDI USB-serial driver |
 | `grub-core/normal/menu.c` | Menu display and input loop |

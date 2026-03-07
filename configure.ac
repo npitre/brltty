@@ -281,17 +281,20 @@ in
       brltty_gcc_cflags="${brltty_gcc_cflags} -Wno-initializer-overrides -Wno-unused-const-variable -Wno-pointer-bool-conversion"
       ;;
    elf*)
-      brltty_gcc_cppflags="${brltty_gcc_cppflags} -ffreestanding -nostdinc -nostdlib"
       CPPFLAGS="${CPPFLAGS} -DGRUB_RUNTIME -DGRUB_FILE=__FILE__ -DNESTED_FUNC_ATTR="
 
-      brltty_include_directory=`$CC -print-file-name=include`
-      CPPFLAGS="${CPPFLAGS} -isystem $brltty_include_directory"
+      dnl -nostdinc must come before -isystem/-I so it clears default paths
+      dnl first, then our explicit paths are added back.
+      brltty_gcc_cppflags="${brltty_gcc_cppflags} -ffreestanding -nostdinc -nostdlib"
 
       brltty_grub_root="`pwd`/grub-root"
       test -d $brltty_grub_root || {
          AC_MSG_ERROR([symbolic link not found: $brltty_grub_root])
       }
-      CPPFLAGS="${CPPFLAGS} -I$brltty_grub_root -I$brltty_grub_root/grub-core/lib/posix_wrap/include -I$brltty_grub_root/include"
+
+      brltty_include_directory=`$CC -print-file-name=include`
+      brltty_gcc_cppflags="${brltty_gcc_cppflags} -isystem $brltty_include_directory"
+      brltty_gcc_cppflags="${brltty_gcc_cppflags} -I$brltty_grub_root -I$brltty_grub_root/grub-core/lib/posix_wrap -I$brltty_grub_root/include"
       ;;
 esac
 

@@ -28,16 +28,16 @@ for the target GRUB platform.
 
 Fedora/RHEL::
 
-      dnf install gcc make
+      dnf install gcc make autoconf
 
 Debian/Ubuntu::
 
-      apt install gcc make
+      apt install gcc make autoconf
 
 Building
 --------
 
-The module must be built against the GRUB source tree. There is no
+The module must be built against a configured GRUB source tree. There is no
 ``grub-devel`` package providing the required headers.
 
 1. Obtain the GRUB source::
@@ -49,28 +49,70 @@ The module must be built against the GRUB source tree. There is no
       dnf download --source grub2        # Fedora/RHEL
       apt-get source grub2               # Debian/Ubuntu
 
-2. Create a symlink named ``grub-root`` in the BRLTTY source root pointing to
+2. Bootstrap and configure the GRUB source tree::
+
+      cd /path/to/grub
+      ./bootstrap
+      ./configure --target=x86_64 --with-platform=efi
+
+   For Legacy BIOS builds::
+
+      ./configure --target=i386 --with-platform=pc
+
+   A full GRUB ``make`` is not required — only ``./configure`` is needed
+   to generate ``config.h`` and the header symlinks (``grub/cpu``,
+   ``grub/machine``) that BRLTTY's build depends on.
+
+3. Create a symlink named ``grub-root`` in the BRLTTY source root pointing to
    the GRUB source tree::
 
       cd /path/to/brltty
       ln -s /path/to/grub grub-root
 
-3. Configure the build::
+4. Configure the BRLTTY build::
 
-      ./cfg-grub
+      ./cfg-grub --with-grub-platform=x86_64-efi
 
-   The script auto-detects the installed GRUB platform (``x86_64-efi``,
-   ``i386-pc``, etc.) and configures the compiler accordingly. To override::
+   For Legacy BIOS builds::
 
       ./cfg-grub --with-grub-platform=i386-pc
 
+   If the target system has GRUB installed, the platform can be auto-detected
+   by omitting the ``--with-grub-platform`` option. Distro packagers building
+   for multiple platforms should always specify it explicitly.
+
    Additional configure options may be passed through::
 
-      ./cfg-grub --with-braille-driver=hw
+      ./cfg-grub --with-grub-platform=x86_64-efi --with-braille-driver=hw
 
-4. Build the GRUB module::
+5. Build the GRUB module::
 
       make brltty.mod
+
+Building for Multiple Platforms
+-------------------------------
+
+Distros typically ship GRUB for both Legacy BIOS and UEFI. Build the module
+separately for each platform:
+
+1. Configure and build for UEFI::
+
+      cd /path/to/grub
+      ./configure --target=x86_64 --with-platform=efi
+      cd /path/to/brltty
+      ./cfg-grub --with-grub-platform=x86_64-efi
+      make brltty.mod
+      cp brltty.mod /output/x86_64-efi/
+
+2. Reconfigure and build for Legacy BIOS::
+
+      cd /path/to/grub
+      ./configure --target=i386 --with-platform=pc
+      cd /path/to/brltty
+      make clean
+      ./cfg-grub --with-grub-platform=i386-pc
+      make brltty.mod
+      cp brltty.mod /output/i386-pc/
 
 Installation
 ------------
@@ -129,5 +171,5 @@ Limitations
 * Bluetooth is not supported.
 * Speech is not supported.
 * USB 3.0 (xHCI) host controllers are not supported by GRUB.
-* The module must be compiled from source against a GRUB source tree that
-  matches (or is close to) the installed GRUB version.
+* The module must be compiled from source against a configured GRUB source
+  tree. The GRUB version should match (or be close to) the installed version.
