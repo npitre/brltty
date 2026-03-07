@@ -369,30 +369,135 @@ GRUB menu loop
             -> return injected GRUB keycode or GRUB_TERM_NO_KEY
 ```
 
-### 5.4 Module Entry Point
+### 5.4 Module Entry Point and Command Registration
 
-`Programs/grub_module.c` provides the GRUB module hooks:
+GRUB's `insmod` command does not pass arguments to modules — `grub_mod_init()`
+receives only a `grub_dl_t` module handle. To accept configuration,
+`GRUB_MOD_INIT` registers a `brltty` GRUB command, and the actual
+initialization happens when that command is invoked.
 
 ```c
+static grub_err_t
+grub_cmd_brltty (grub_command_t cmd, int argc, char *argv[])
+{
+  // argc/argv come from the GRUB command line, e.g.:
+  //   brltty -b hw -q -n
+  brlttyConstruct(argc, argv);
+  return GRUB_ERR_NONE;
+}
+
 GRUB_MOD_INIT(brltty)
 {
-  brlttyConstruct(argc, argv);  // argv = {"brltty", "-q", "-n"}
+  grub_register_command("brltty", grub_cmd_brltty,
+                        "[OPTIONS]", "Start BRLTTY braille support.");
 }
 
 GRUB_MOD_FINI(brltty)
 {
   brlttyDestruct();
+  grub_unregister_command(...);
 }
 ```
 
-`brlttyConstruct()` initializes the BRLTTY core, which loads the screen driver
-(triggering shadow terminal installation) and probes for braille devices.
-`brlttyDestruct()` shuts everything down and restores the original terminal.
+This gives users and distro packagers full control via `grub.cfg`:
+
+```
+# Load the module and USB stack
+insmod usb
+insmod uhci
+insmod ohci
+insmod ehci
+insmod brltty
+
+# Start BRLTTY with options
+brltty -b hw -q -n
+```
+
+Or from the GRUB command line interactively:
+
+```
+grub> insmod brltty
+grub> brltty --braille-driver=hw
+```
+
+GRUB environment variables provide an alternative configuration channel.
+`GRUB_MOD_INIT` can read variables via `grub_env_get()` for auto-start
+scenarios where the user wants BRLTTY to start immediately on module load
+without a separate command:
+
+```
+# In grub.cfg:
+set brltty_args="-b hw -q -n"
+insmod brltty
+```
 
 
-## 6. Freestanding Environment — POSIX Compatibility
+## 6. Configuration and File Access
 
-### 6.1 The Problem
+### 6.1 GRUB's File API
+
+GRUB has a full filesystem abstraction that can read files from any mounted
+partition. The API (`grub/file.h`) provides:
+
+```c
+grub_file_t grub_file_open  (const char *name, enum grub_file_type type);
+grub_ssize_t grub_file_read (grub_file_t file, void *buf, grub_size_t len);
+grub_err_t   grub_file_close(grub_file_t file);
+grub_off_t   grub_file_seek (grub_file_t file, grub_off_t offset);
+grub_off_t   grub_file_size (const grub_file_t file);
+```
+
+File paths use GRUB's device syntax: `(hd0,gpt2)/etc/brltty.conf` or
+paths relative to GRUB's `$prefix` variable (typically `/boot/grub`).
+
+### 6.2 File Access for BRLTTY
+
+This enables loading real configuration files, key tables, and text tables
+from disk at boot time. BRLTTY's file I/O functions (`Programs/file.c`)
+can be given `GRUB_RUNTIME` implementations that wrap the GRUB file API:
+
+| BRLTTY operation | GRUB implementation |
+|------------------|---------------------|
+| Open file | `grub_file_open(path, GRUB_FILE_TYPE_NONE)` |
+| Read file | `grub_file_read(file, buf, len)` |
+| Close file | `grub_file_close(file)` |
+| Get file size | `grub_file_size(file)` |
+| Seek | `grub_file_seek(file, offset)` |
+| File exists check | `grub_file_open()` + `grub_file_close()` |
+
+Note: GRUB's file API is read-only — writing (e.g., saving preferences) is
+not possible, which is expected in a bootloader context.
+
+### 6.3 Configuration File Locations
+
+BRLTTY can look for configuration files relative to GRUB's `$prefix`:
+
+```
+$prefix/brltty.conf          # e.g. /boot/grub/brltty.conf
+$prefix/brltty/Input/        # key table files
+$prefix/brltty/Text/         # text table files
+```
+
+Alternatively, paths can be specified as arguments to the `brltty` command:
+
+```
+brltty -f (hd0,gpt2)/etc/brltty.conf
+```
+
+### 6.4 What Cannot Be Loaded
+
+Some BRLTTY features inherently require a hosted OS and should be compiled
+out under `GRUB_RUNTIME`:
+
+- Configuration from environment variables (`getenv`)
+- Standard input processing (`stdin`)
+- Preferences file writing
+- Locale and internationalization
+
+
+## 7. Freestanding Environment — POSIX Compatibility
+
+### 7.1 The Problem
 
 BRLTTY's core source files assume a POSIX hosted environment. Under GRUB's
 freestanding build (`-ffreestanding -nostdinc -nostdlib`), many standard
@@ -404,7 +509,7 @@ GRUB provides partial POSIX compatibility through its `posix_wrap` directory
 `errno.h`, `wchar.h`, `wctype.h`, `unistd.h`, `assert.h`, `locale.h`,
 `inttypes.h`.
 
-### 6.2 Missing Headers
+### 7.2 Missing Headers
 
 The following standard headers are not provided by GRUB's `posix_wrap`
 and are included by BRLTTY core files:
@@ -415,7 +520,7 @@ and are included by BRLTTY core files:
 | `time.h` | `core.c`, `timing_types.h` | `struct timespec` (BRLTTY has GRUB alternatives) |
 | `fcntl.h` | `program.c`, `messages.c`, `log.c` | File operations (not relevant in GRUB) |
 
-### 6.3 Missing Functions
+### 7.3 Missing Functions
 
 GRUB's `posix_wrap` headers declare some POSIX functions but not all that
 BRLTTY uses. Functions missing at compile time:
@@ -432,32 +537,38 @@ BRLTTY uses. Functions missing at compile time:
 | Error codes | `ENOENT`, `ENOSYS` | `cmdline.c`, `pid.c` |
 | Integer limits | `UINT16_MAX` | `cmdput.c` |
 
-### 6.4 Macro Conflicts
+### 7.4 Macro Conflicts
 
 - `ARRAY_SIZE` — both GRUB (`grub/misc.h`) and BRLTTY define this macro
   with different signatures. Needs conditional definition.
 
-### 6.5 Resolution Strategy
+### 7.5 Resolution Strategy
 
-These issues fall into two categories:
+These issues fall into three categories:
 
-**Dead code paths** — Many of the missing functions are used in code paths
-that will never execute under GRUB (config file parsing, stdin processing,
-environment variables, option parsing with `getopt`). These can be guarded
-with `#ifndef GRUB_RUNTIME` to compile them out.
+**Dead code paths** — Functions used in code paths that have no meaning in
+a bootloader: `stdin`/`stdout` processing, environment variables (`getenv`),
+process control (`exit`). These should be guarded with `#ifndef GRUB_RUNTIME`
+to compile them out.
 
-**Missing stubs** — Functions that are called from code paths that do
-execute under GRUB need either:
-- GRUB-specific implementations (e.g., `exit()` -> `grub_fatal()`)
-- Stub implementations that satisfy the linker
-- Additional `posix_wrap`-style headers in BRLTTY's own tree
+**GRUB-replaceable code paths** — File I/O (`fopen`/`fread`/`fclose`) and
+configuration file parsing are needed in GRUB but must use GRUB's own file
+API (Section 6). These need `#ifdef GRUB_RUNTIME` alternative implementations
+that call `grub_file_open()` / `grub_file_read()` / `grub_file_close()`.
+Similarly, `exit()` maps to `grub_fatal()`, and `strerror()` can map to
+`grub_errmsg`.
+
+**Missing stubs** — Functions that are referenced but never actually called
+at runtime (e.g., in unreachable branches after `#ifdef` simplification)
+may need trivial stub definitions to satisfy the linker.
 
 The preferred approach is `#ifdef GRUB_RUNTIME` guards in the BRLTTY source,
 keeping changes minimal and localized. BRLTTY already uses this pattern
-extensively in `Programs/timing.c`.
+extensively in `Programs/timing.c`, `Programs/file.c`, `Programs/pid.c`,
+`Programs/program.c`, `Programs/config.c`, and `Programs/serial.c`.
 
 
-## 7. Implementation Status
+## 8. Implementation Status
 
 ### Completed
 
@@ -490,7 +601,18 @@ extensively in `Programs/timing.c`.
 
 ### Remaining Work
 
-- **POSIX compatibility** (Section 6) — Add `#ifdef GRUB_RUNTIME` guards
+- **Command-based entry point** (Section 5.4) — Update `Programs/grub_module.c`
+  to register a `brltty` GRUB command via `grub_register_command()` instead of
+  calling `brlttyConstruct()` directly from `GRUB_MOD_INIT`. This enables
+  passing arguments (e.g., `brltty -b hw -q`) and supports auto-start via
+  GRUB environment variables.
+
+- **GRUB file I/O wrappers** (Section 6) — Implement `GRUB_RUNTIME` paths
+  in BRLTTY's file I/O code (`Programs/file.c`) wrapping `grub_file_open()` /
+  `grub_file_read()` / `grub_file_close()`. This enables loading `brltty.conf`,
+  key tables, and text tables from disk.
+
+- **POSIX compatibility** (Section 7) — Add `#ifdef GRUB_RUNTIME` guards
   to core source files to compile out POSIX-dependent code paths that are
   not relevant in GRUB. This is the primary blocker for a successful build.
 
@@ -501,7 +623,7 @@ extensively in `Programs/timing.c`.
   finalization.
 
 
-## 8. Key Source Files Reference
+## 9. Key Source Files Reference
 
 ### BRLTTY (this repository)
 
