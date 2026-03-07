@@ -20,11 +20,25 @@
 . "`dirname "${0}"`/brltty-prologue.sh"
 
 handleInitialHelpOption "${@}" <<END-OF-HELP
-Configure a BRLTTY build for running within the Grub boot loader.
+Configure a BRLTTY build for the GRUB boot loader.
 
 Syntax: ${programName} {-h | [-option ...]}
 
-All of the options are passed through, unmodified, as additional options to the configure script.
+All of the options are passed through, unmodified, as additional
+options to the configure script.
+
+The GRUB target platform is auto-detected from the installed GRUB.
+Override with: ${programName} --with-grub-platform=i386-pc
+               ${programName} --with-grub-platform=x86_64-efi
+
+Prerequisites (Fedora/RHEL):
+   dnf install gcc make
+
+Prerequisites (Debian/Ubuntu):
+   apt install gcc make
+
+A GRUB source tree must be symlinked as grub-root in the BRLTTY
+source directory (see Documents/README.Grub for details).
 END-OF-HELP
 
 # Braille drivers already disabled:
@@ -32,6 +46,66 @@ END-OF-HELP
 # il (not on Linux)
 # lb (by --without-libbraille)
 # xw (by --disable-x)
+
+# Determine the GRUB target platform.
+# GRUB modules must match the installed GRUB's architecture:
+#   i386-pc       — Legacy BIOS (32-bit modules)
+#   x86_64-efi    — 64-bit UEFI (64-bit modules)
+#   i386-efi      — 32-bit UEFI (32-bit modules)
+grubPlatform=""
+for option
+do
+   case "${option}"
+   in
+      --with-grub-platform=*)
+         grubPlatform="${option#*=}"
+         ;;
+   esac
+done
+
+if [ -z "${grubPlatform}" ]
+then
+   # Auto-detect from installed GRUB modules.
+   for dir in /boot/grub/x86_64-efi /boot/grub2/x86_64-efi \
+              /boot/grub/i386-pc /boot/grub2/i386-pc \
+              /boot/grub/i386-efi /boot/grub2/i386-efi
+   do
+      if [ -d "${dir}" ]
+      then
+         grubPlatform="${dir##*/}"
+         break
+      fi
+   done
+fi
+
+if [ -z "${grubPlatform}" ]
+then
+   echo "${programName}: cannot detect GRUB platform." >&2
+   echo "Use --with-grub-platform=x86_64-efi or --with-grub-platform=i386-pc" >&2
+   exit 1
+fi
+
+echo "${programName}: building for GRUB platform: ${grubPlatform}"
+
+# Set compiler flags to match GRUB's module build environment.
+# GRUB uses the native system GCC with -m32 or -m64 as needed.
+# No cross-compiler is required for native-architecture builds.
+grubCC="${CC:-gcc}"
+grubCFLAGS=""
+
+case "${grubPlatform}"
+in
+   i386-*)
+      grubCFLAGS="-m32"
+      ;;
+   x86_64-*)
+      grubCFLAGS="-m64"
+      ;;
+   *)
+      echo "${programName}: unsupported GRUB platform: ${grubPlatform}" >&2
+      exit 1
+      ;;
+esac
 
 configureOptions=(
    --enable-standalone-programs
@@ -61,7 +135,15 @@ configureOptions=(
    --without-midi-package
    --without-fm-package
 
+   # Use --host=i386-elf to trigger GRUB_RUNTIME platform detection in
+   # configure.ac, but override all tools so the native system toolchain
+   # is used instead of looking for i386-elf-* cross tools.
    --host=i386-elf
+   CC="${grubCC}"
+   CFLAGS="${grubCFLAGS}"
+   LD=ld
+   STRIP=strip
+   RANLIB=ranlib
 )
 
 "${programDirectory}/configure" --quiet "${configureOptions[@]}" "${@}"

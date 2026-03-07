@@ -19,6 +19,21 @@ Bluetooth braille displays are not supported — GRUB has no Bluetooth stack.
 
 Speech output is not available — GRUB has no audio subsystem.
 
+Prerequisites
+-------------
+
+Only a standard GCC toolchain is needed — no cross-compiler is required.
+The native system GCC is used with ``-m32`` or ``-m64`` as appropriate
+for the target GRUB platform.
+
+Fedora/RHEL::
+
+      dnf install gcc make
+
+Debian/Ubuntu::
+
+      apt install gcc make
+
 Building
 --------
 
@@ -43,6 +58,11 @@ The module must be built against the GRUB source tree. There is no
 3. Configure the build::
 
       ./cfg-grub
+
+   The script auto-detects the installed GRUB platform (``x86_64-efi``,
+   ``i386-pc``, etc.) and configures the compiler accordingly. To override::
+
+      ./cfg-grub --with-grub-platform=i386-pc
 
    Additional configure options may be passed through::
 
