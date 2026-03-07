@@ -923,6 +923,52 @@ brltty.$O:
 
 ###############################################################################
 
+# GRUB loadable module target.
+#
+# "brltty.module" is a relocatable ELF (-Wl,-r) containing all BRLTTY
+# objects plus the GRUB_MOD_INIT/FINI entry point. It uses grub_module.c
+# instead of brltty.c (no main(), uses GRUB module lifecycle instead).
+#
+# "brltty.mod" is produced from brltty.module by adding .modname/.moddeps
+# sections and stripping, matching what GRUB's genmod.sh does. If the
+# GRUB source tree has a built genmod.sh, we use it; otherwise we do
+# a minimal version of the same steps with objcopy and strip.
+#
+# Build with: make brltty.mod
+# Then copy brltty.mod to /boot/grub/<arch>/ for use with "insmod brltty".
+
+GRUB_MODULE_OBJECTS = grub_module.$O $(CORE_OBJECTS)
+
+grub_module.$O:
+	$(CC) $(CFLAGS) -c $(SRC_DIR)/grub_module.c
+
+brltty.module: $(GRUB_MODULE_OBJECTS)
+	$(CC) $(LDFLAGS) -nostdlib -Wl,-r -o $@ $(GRUB_MODULE_OBJECTS) $(BRLTTY_LIBRARIES)
+
+brltty.mod: brltty.module
+	cp $< $@.tmp
+	@t1=$$(mktemp); \
+	printf 'brltty\0' > $$t1; \
+	t2=$$(mktemp); \
+	printf 'usb\0' > $$t2; \
+	if command -v $(TARGET_OBJCOPY) >/dev/null 2>&1; then \
+	  objcopy=$$(command -v $(TARGET_OBJCOPY)); \
+	else \
+	  objcopy=$$(command -v objcopy); \
+	fi; \
+	$$objcopy --add-section .modname=$$t1 --add-section .moddeps=$$t2 $@.tmp 2>/dev/null || true; \
+	rm -f $$t1 $$t2
+	-$(TARGET_STRIP) --strip-unneeded \
+		-K grub_mod_init -K grub_mod_fini \
+		-K _grub_mod_init -K _grub_mod_fini \
+		-R .note -R .comment -R .eh_frame \
+		-R .rela.eh_frame -R .rel.eh_frame \
+		-R .note.GNU-stack -R .note.gnu.gold-version \
+		$@.tmp 2>/dev/null || true
+	mv $@.tmp $@
+
+###############################################################################
+
 BRLTTY_CORE_LIB = $(LIB_PFX)$(CORE_NAME)_core.$(LIB_EXT)
 
 core-library: $(BRLTTY_CORE_LIB)

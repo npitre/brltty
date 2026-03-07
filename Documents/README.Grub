@@ -48,9 +48,9 @@ The module must be built against the GRUB source tree. There is no
 
       ./cfg-grub --with-braille-driver=hw
 
-4. Build::
+4. Build the GRUB module::
 
-      make
+      make brltty.mod
 
 Installation
 ------------
