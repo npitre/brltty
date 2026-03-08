@@ -56,6 +56,15 @@ GRUB_MOD_INIT(brltty)
   ProgramExitStatus status = brlttyConstruct(argc, argv);
   if (status == PROG_EXIT_SUCCESS) {
     grub_printf("brltty: initialized successfully\n");
+
+    /* brlttyConstruct() schedules driver start activities via async alarms.
+     * These alarms only fire when the event loop runs. Pump a few iterations
+     * so the screen and braille drivers actually start. Once the screen
+     * driver starts, it registers a grub_term_input whose getkey() callback
+     * calls brlttyWait(0) on every GRUB input poll — sustaining the loop. */
+    for (int i = 0; i < 10; i++) {
+      brlttyWait(0);
+    }
   } else {
     grub_printf("brltty: initialization failed (status %d)\n", status);
   }

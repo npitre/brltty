@@ -223,6 +223,11 @@ serial --unit=0 --speed=115200
 terminal_output serial
 terminal_input serial
 
+# Set root device so GRUB file access works (e.g. for brltty tables).
+# Note: embedded modules init before grub.cfg runs, so init-time file
+# access still fails. This helps with runtime file access only.
+set root=(hd0,gpt1)
+
 echo "──────────────────────────────────────────"
 echo "BRLTTY GRUB Module Test"
 echo "──────────────────────────────────────────"

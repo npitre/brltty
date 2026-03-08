@@ -350,8 +350,10 @@ read (int fd, void *buf, grub_size_t count) {
   return -1;
 }
 
-/* ─── Command-line parsing stubs ──────────────────────────────────────
- * In GRUB, arguments come via grub_register_command(), not getopt.
+/* ─── Command-line parsing ────────────────────────────────────────────
+ * Minimal getopt() — just enough for brlttyConstruct()'s option parsing.
+ * Handles short options with and without required arguments (e.g. "-l debug").
+ * Does not handle optional arguments, option bundling, or "--" termination.
  */
 char *optarg = NULL;
 int optind = 1;
@@ -360,8 +362,44 @@ int optopt = '?';
 
 int
 getopt (int argc, char *const argv[], const char *optstring) {
-  (void)argc; (void)argv; (void)optstring;
-  return -1;
+  const char *p;
+
+  optarg = NULL;
+
+  if (optind >= argc || argv[optind] == NULL)
+    return -1;
+
+  if (argv[optind][0] != '-' || argv[optind][1] == '\0')
+    return -1;
+
+  optopt = argv[optind][1];
+
+  p = grub_strchr(optstring, optopt);
+  if (p == NULL) {
+    optind++;
+    return '?';
+  }
+
+  if (p[1] == ':') {
+    /* Option takes an argument. */
+    if (argv[optind][2] != '\0') {
+      /* Argument attached: -lDEBUG */
+      optarg = (char *)&argv[optind][2];
+      optind++;
+    } else if (optind + 1 < argc) {
+      /* Argument is the next argv element: -l DEBUG */
+      optind++;
+      optarg = (char *)argv[optind];
+      optind++;
+    } else {
+      optind++;
+      return '?';
+    }
+  } else {
+    optind++;
+  }
+
+  return optopt;
 }
 
 /* ─── Locale stubs ────────────────────────────────────────────────────
