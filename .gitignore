@@ -45,3 +45,8 @@ reldeps.mk
 *.xz
 
 /lib/
+
+# GRUB module build
+*.mod
+*.module
+/grub-root
