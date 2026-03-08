@@ -945,26 +945,30 @@ grub_module.$O:
 brltty.module: $(GRUB_MODULE_OBJECTS)
 	$(CC) $(LDFLAGS) -nostdlib -Wl,-r -o $@ $(GRUB_MODULE_OBJECTS) $(BRLTTY_LIBRARIES)
 
+GRUB_OBJCOPY = objcopy
+GRUB_STRIP = strip
+
 brltty.mod: brltty.module
 	cp $< $@.tmp
 	@t1=$$(mktemp); \
 	printf 'brltty\0' > $$t1; \
 	t2=$$(mktemp); \
 	printf 'usb\0' > $$t2; \
-	if command -v $(TARGET_OBJCOPY) >/dev/null 2>&1; then \
-	  objcopy=$$(command -v $(TARGET_OBJCOPY)); \
-	else \
-	  objcopy=$$(command -v objcopy); \
-	fi; \
-	$$objcopy --add-section .modname=$$t1 --add-section .moddeps=$$t2 $@.tmp 2>/dev/null || true; \
+	$(GRUB_OBJCOPY) \
+		-R .modname -R .moddeps \
+		--add-section .modname=$$t1 \
+		--add-section .moddeps=$$t2 \
+		$@.tmp; \
 	rm -f $$t1 $$t2
-	-$(TARGET_STRIP) --strip-unneeded \
+	$(GRUB_STRIP) --strip-unneeded \
 		-K grub_mod_init -K grub_mod_fini \
 		-K _grub_mod_init -K _grub_mod_fini \
 		-R .note -R .comment -R .eh_frame \
 		-R .rela.eh_frame -R .rel.eh_frame \
 		-R .note.GNU-stack -R .note.gnu.gold-version \
-		$@.tmp 2>/dev/null || true
+		-R .note.gnu.property -R .gnu.build.attributes \
+		-R .rel.gnu.build.attributes -R .rela.gnu.build.attributes \
+		$@.tmp
 	mv $@.tmp $@
 
 ###############################################################################

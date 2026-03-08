@@ -1076,6 +1076,13 @@ newOutputOperation (const void *parameters) {
 
 #else /* ASYNC_CAN_MONITOR_IO */
 int
+asyncExecuteIoCallback (AsyncIoData *iod, long int timeout) {
+  (void)iod;
+  approximateDelay(timeout);
+  return 0;
+}
+
+int
 asyncHandleOperation (AsyncThreadSpecificData *tsd, long int timeout) {
   approximateDelay(timeout);
   return 0;

@@ -175,6 +175,13 @@ static inline void __sync_synchronize (void) {}
 #undef interface
 #endif /* interface */
 
+#ifdef GRUB_RUNTIME
+/* Avoid redefinition warning: GRUB's grub/misc.h (pulled in via
+   sys/types.h) defines its own 1-arg ARRAY_SIZE. We #undef ours
+   here and install the variadic dispatch version later. */
+#undef ARRAY_SIZE
+#endif
+
 #include <sys/types.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -212,6 +219,10 @@ ffs (int i) {
 #undef NESTED_FUNC_ATTR
 #define NESTED_FUNC_ATTR __attribute__((__regparm__(1)))
 
+/* __builtin_popcount generates a libgcc call (__popcountdi2) which
+   is unavailable in freestanding mode. Use the manual loop instead. */
+#undef HAVE_BUILTIN_POPCOUNT
+
 /* missing needed standard integer definitions */
 #define INT16_MAX 0X7FFF
 #define UINT16_MAX 0XFFFF
@@ -244,9 +255,15 @@ ffs (int i) {
 #define PRIdMAX "lld"
 #define PRIuMAX "llu"
 #define PRIxMAX "llx"
+#ifdef __INTPTR_FMTd__
 #define PRIdPTR __INTPTR_FMTd__
 #define PRIuPTR __INTPTR_FMTu__
 #define PRIxPTR __INTPTR_FMTx__
+#else
+#define PRIdPTR "ld"
+#define PRIuPTR "lu"
+#define PRIxPTR "lx"
+#endif
 
 /* missing errno codes — map to GRUB error codes */
 #ifndef ENOENT
@@ -399,14 +416,6 @@ extern int select (int nfds, fd_set *r, fd_set *w, fd_set *e, struct timeval *t)
 #endif
 typedef unsigned long dev_t;
 
-/* Format macros that depend on __INTPTR_FMTd__ */
-#ifndef __INTPTR_FMTd__
-#define PRIdPTR "ld"
-#undef PRIuPTR
-#define PRIuPTR "lu"
-#undef PRIxPTR
-#define PRIxPTR "lx"
-#endif
 #define PRIXPTR PRIxPTR
 #define PRIi32 "d"
 
