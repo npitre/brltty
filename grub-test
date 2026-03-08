@@ -1,0 +1,374 @@
+#!/bin/bash
+###############################################################################
+# BRLTTY - A background process providing access to the console screen (when in
+#          text mode) for a blind person using a refreshable braille display.
+#
+# Copyright (C) 1995-2026 by The BRLTTY Developers.
+#
+# BRLTTY comes with ABSOLUTELY NO WARRANTY.
+#
+# This is free software, placed under the terms of the
+# GNU Lesser General Public License, as published by the Free Software
+# Foundation; either version 2.1 of the License, or (at your option) any
+# later version. Please see the file LICENSE-LGPL for details.
+#
+# Web Page: http://brltty.app/
+#
+# This software is maintained by Dave Mielke <dave@mielke.cc>.
+###############################################################################
+
+set -euo pipefail
+
+programName="${0##*/}"
+programDirectory="$(cd "$(dirname "$0")" && pwd)"
+
+# ── Configurable paths ──────────────────────────────────────────────────────
+
+GRUB_MOD_DIR="${GRUB_MOD_DIR:-/usr/lib/grub/x86_64-efi}"
+OVMF_CODE="${OVMF_CODE:-/usr/share/edk2/ovmf/OVMF_CODE.fd}"
+OVMF_VARS="${OVMF_VARS:-/usr/share/edk2/ovmf/OVMF_VARS.fd}"
+QEMU="${QEMU:-qemu-system-x86_64}"
+
+BUILD_DIR="${programDirectory}/Programs"
+IMAGE_DIR="${programDirectory}/grub-test.d"
+DISK_IMAGE="${IMAGE_DIR}/test.img"
+SERIAL_LOG="${IMAGE_DIR}/serial.log"
+
+DISK_SIZE_MB=64
+
+# ── Usage ────────────────────────────────────────────────────────────────────
+
+usage () {
+   cat <<END
+Test BRLTTY as a GRUB loadable module in QEMU.
+
+Usage: ${programName} build-image   Build the EFI disk image
+       ${programName} run [OPTS]    Boot QEMU with the disk image
+       ${programName} log           Show the serial console log
+       ${programName} clean         Remove test artifacts
+
+Run options:
+   --usb-host=VENDOR:PRODUCT   Pass a USB device through to the VM
+   --debug=CATEGORY            GRUB debug category (default: none)
+   --graphic                   Show QEMU graphical window (default: nographic)
+
+Environment variables:
+   GRUB_MOD_DIR   System GRUB modules (default: /usr/lib/grub/x86_64-efi)
+   OVMF_CODE      OVMF firmware code (default: /usr/share/edk2/ovmf/OVMF_CODE.fd)
+   OVMF_VARS      OVMF firmware vars (default: /usr/share/edk2/ovmf/OVMF_VARS.fd)
+   QEMU           QEMU binary (default: qemu-system-x86_64)
+END
+   exit "${1:-0}"
+}
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+die () { echo "${programName}: error: $*" >&2; exit 1; }
+info () { echo "${programName}: $*"; }
+
+check_prerequisites () {
+   local missing=()
+
+   [ -f "${OVMF_CODE}" ] || missing+=("OVMF_CODE (${OVMF_CODE})")
+   [ -f "${OVMF_VARS}" ] || missing+=("OVMF_VARS (${OVMF_VARS})")
+   [ -d "${GRUB_MOD_DIR}" ] || missing+=("GRUB_MOD_DIR (${GRUB_MOD_DIR})")
+   command -v "${QEMU}" >/dev/null || missing+=("${QEMU}")
+   command -v mformat >/dev/null || missing+=("mtools (mformat)")
+   command -v mcopy >/dev/null || missing+=("mtools (mcopy)")
+   command -v grub2-mkimage >/dev/null 2>&1 || \
+      command -v grub-mkimage >/dev/null 2>&1 || \
+      missing+=("grub2-mkimage or grub-mkimage")
+
+   if [ ${#missing[@]} -gt 0 ]; then
+      echo "${programName}: missing prerequisites:" >&2
+      for item in "${missing[@]}"; do
+         echo "  - ${item}" >&2
+      done
+      echo "" >&2
+      echo "On Fedora: dnf install qemu-system-x86-core edk2-ovmf mtools grub2-efi-x64-modules" >&2
+      exit 1
+   fi
+}
+
+grub_mkimage () {
+   if command -v grub2-mkimage >/dev/null 2>&1; then
+      grub2-mkimage "$@"
+   else
+      grub-mkimage "$@"
+   fi
+}
+
+# ── build-image ──────────────────────────────────────────────────────────────
+
+do_build_image () {
+   check_prerequisites
+
+   [ -f "${BUILD_DIR}/brltty.mod" ] || \
+      die "brltty.mod not found in ${BUILD_DIR} — run 'make -C Programs brltty.mod' first"
+
+   mkdir -p "${IMAGE_DIR}"
+
+   info "creating ${DISK_SIZE_MB}MB FAT32 disk image"
+   # Create a raw disk image and format as FAT32 using mtools.
+   # The mtools drive letter 'C:' is mapped to the image file via
+   # an ephemeral mtools config.
+   dd if=/dev/zero of="${DISK_IMAGE}" bs=1M count="${DISK_SIZE_MB}" status=none
+
+   # mtools configuration — map drive C: to our image file
+   export MTOOLSRC="${IMAGE_DIR}/mtoolsrc"
+   cat > "${MTOOLSRC}" <<MTOOLS
+drive c:
+   file="${DISK_IMAGE}"
+   partition=1
+MTOOLS
+
+   # Create GPT partition table with an EFI System Partition.
+   # sfdisk understands GPT natively.
+   sfdisk --quiet "${DISK_IMAGE}" <<PARTS
+label: gpt
+type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, size=${DISK_SIZE_MB}M
+PARTS
+
+   # Format the partition as FAT32
+   mformat -i "${DISK_IMAGE}@@1M" -F ::
+
+   # Re-point mtools at the partition offset
+   cat > "${MTOOLSRC}" <<MTOOLS
+drive c:
+   file="${DISK_IMAGE}"
+   offset=1048576
+MTOOLS
+
+   info "creating EFI directory structure"
+   mmd -i "${DISK_IMAGE}@@1M" ::/EFI
+   mmd -i "${DISK_IMAGE}@@1M" ::/EFI/BOOT
+   mmd -i "${DISK_IMAGE}@@1M" ::/boot
+   mmd -i "${DISK_IMAGE}@@1M" ::/boot/grub
+   mmd -i "${DISK_IMAGE}@@1M" ::/boot/grub/x86_64-efi
+   mmd -i "${DISK_IMAGE}@@1M" ::/boot/grub/brltty
+
+   info "building GRUB EFI bootloader image"
+   # Build a standalone GRUB EFI binary with essential modules built in.
+   # Additional modules (usb, brltty) are loaded from disk by grub.cfg.
+   local grub_efi="${IMAGE_DIR}/bootx64.efi"
+   grub_mkimage \
+      -O x86_64-efi \
+      -o "${grub_efi}" \
+      -p /boot/grub \
+      -d "${GRUB_MOD_DIR}" \
+      part_gpt fat normal boot configfile serial terminal echo
+
+   mcopy -i "${DISK_IMAGE}@@1M" "${grub_efi}" ::/EFI/BOOT/BOOTX64.EFI
+
+   info "copying GRUB modules"
+   # Modules needed at runtime (loaded by grub.cfg via insmod).
+   local needed_mods=(
+      # USB stack
+      usb ehci ohci uhci usbms
+      # Terminal and display
+      gfxterm video video_fb efi_gop font all_video
+      # Serial (for debug output capture)
+      serial
+      # Text/command support
+      normal terminal echo test true sleep
+   )
+
+   for mod in "${needed_mods[@]}"; do
+      local src="${GRUB_MOD_DIR}/${mod}.mod"
+      if [ -f "${src}" ]; then
+         mcopy -i "${DISK_IMAGE}@@1M" "${src}" ::/boot/grub/x86_64-efi/
+      else
+         info "  warning: ${mod}.mod not found in ${GRUB_MOD_DIR}, skipping"
+      fi
+   done
+
+   info "copying brltty.mod"
+   mcopy -i "${DISK_IMAGE}@@1M" "${BUILD_DIR}/brltty.mod" ::/boot/grub/x86_64-efi/
+
+   info "copying brltty data files"
+   # Text table — needed for character translation
+   if [ -f "${programDirectory}/Tables/Text/en.ttb" ]; then
+      mcopy -i "${DISK_IMAGE}@@1M" "${programDirectory}/Tables/Text/en.ttb" ::/boot/grub/brltty/
+   fi
+
+   info "writing grub.cfg"
+   local grub_cfg="${IMAGE_DIR}/grub.cfg"
+   cat > "${grub_cfg}" <<'GRUBCFG'
+# BRLTTY GRUB module test configuration
+#
+# Serial console for debug log capture.
+# Serial console for debug log capture.
+# QEMU maps -serial to COM1 (unit 0).
+serial --unit=0 --speed=115200
+
+# Use serial as primary output (avoids double-printing on VGA+serial).
+# The VGA console remains available via 'terminal_output console'.
+terminal_output serial
+terminal_input serial
+
+echo "──────────────────────────────────────────"
+echo "BRLTTY GRUB Module Test"
+echo "──────────────────────────────────────────"
+
+insmod sleep
+
+echo "Loading USB stack..."
+insmod usb
+insmod ehci
+insmod ohci
+insmod uhci
+
+echo "Loading brltty module..."
+insmod brltty
+
+echo ""
+echo "brltty module loaded."
+echo "If a braille device is connected, it should now be active."
+echo ""
+echo "Press 'c' for GRUB command line, or wait for shell..."
+
+sleep 5
+echo "Entering GRUB shell. Type 'halt' to exit QEMU."
+GRUBCFG
+
+   mcopy -i "${DISK_IMAGE}@@1M" "${grub_cfg}" ::/boot/grub/grub.cfg
+
+   rm -f "${MTOOLSRC}" "${grub_efi}"
+
+   info "disk image ready: ${DISK_IMAGE}"
+   info "  brltty.mod:  $(stat -c%s "${BUILD_DIR}/brltty.mod") bytes"
+   info "  disk image:  $(stat -c%s "${DISK_IMAGE}") bytes"
+}
+
+# ── run ──────────────────────────────────────────────────────────────────────
+
+do_run () {
+   [ -f "${DISK_IMAGE}" ] || die "disk image not found — run '${programName} build-image' first"
+   [ -f "${OVMF_CODE}" ] || die "OVMF_CODE not found: ${OVMF_CODE}"
+   [ -f "${OVMF_VARS}" ] || die "OVMF_VARS not found: ${OVMF_VARS}"
+
+   local usb_host=""
+   local grub_debug=""
+   local nographic=1
+
+   while [ $# -gt 0 ]; do
+      case "$1" in
+         --usb-host=*)
+            usb_host="${1#*=}"
+            ;;
+         --debug=*)
+            grub_debug="${1#*=}"
+            ;;
+         --graphic)
+            nographic=0
+            ;;
+         *)
+            die "unknown option: $1"
+            ;;
+      esac
+      shift
+   done
+
+   # Make a writable copy of OVMF_VARS (QEMU modifies it for NVRAM).
+   local vars_copy="${IMAGE_DIR}/OVMF_VARS.fd"
+   cp "${OVMF_VARS}" "${vars_copy}"
+
+   local qemu_args=(
+      -machine q35
+      -m 256
+      -cpu host
+      -enable-kvm
+
+      # EFI firmware
+      -drive if=pflash,format=raw,readonly=on,file="${OVMF_CODE}"
+      -drive if=pflash,format=raw,file="${vars_copy}"
+
+      # Disk image
+      -drive file="${DISK_IMAGE}",format=raw,if=virtio
+
+      # USB controller (xHCI for USB 2.0/3.0 devices)
+      -device qemu-xhci,id=xhci
+   )
+
+   if [ "${nographic}" -eq 1 ]; then
+      # nographic: -nographic connects serial0 to stdio, giving an
+      # interactive GRUB serial console. Ctrl-A X exits QEMU.
+      # The logfile option captures all serial I/O to disk.
+      qemu_args+=(
+         -display none
+         -chardev stdio,id=s0,logfile="${SERIAL_LOG}",signal=off
+         -serial chardev:s0
+      )
+   else
+      # graphic: serial → log file, VGA on screen.
+      qemu_args+=( -serial "file:${SERIAL_LOG}" )
+   fi
+
+   # USB passthrough
+   if [ -n "${usb_host}" ]; then
+      local vendor="${usb_host%%:*}"
+      local product="${usb_host##*:}"
+      qemu_args+=(
+         -device usb-host,bus=xhci.0,vendorid="0x${vendor}",productid="0x${product}"
+      )
+      info "USB passthrough: ${vendor}:${product}"
+   fi
+
+   info "booting QEMU (serial log: ${SERIAL_LOG})"
+   if [ "${nographic}" -eq 1 ]; then
+      info "press Ctrl-A X to exit QEMU"
+   fi
+
+   : > "${SERIAL_LOG}"
+   "${QEMU}" "${qemu_args[@]}"
+
+   info "QEMU exited. Serial log: ${SERIAL_LOG}"
+}
+
+# ── log ──────────────────────────────────────────────────────────────────────
+
+do_log () {
+   [ -f "${SERIAL_LOG}" ] || die "no serial log found — run '${programName} run' first"
+   cat "${SERIAL_LOG}"
+}
+
+# ── clean ────────────────────────────────────────────────────────────────────
+
+do_clean () {
+   if [ -d "${IMAGE_DIR}" ]; then
+      rm -rf "${IMAGE_DIR}"
+      info "removed ${IMAGE_DIR}"
+   else
+      info "nothing to clean"
+   fi
+}
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+case "${1:-}" in
+   build-image)
+      shift
+      do_build_image "$@"
+      ;;
+   run)
+      shift
+      do_run "$@"
+      ;;
+   log)
+      shift
+      do_log
+      ;;
+   clean)
+      shift
+      do_clean
+      ;;
+   -h|--help|help)
+      usage 0
+      ;;
+   "")
+      usage 1
+      ;;
+   *)
+      die "unknown command: $1 (try '${programName} --help')"
+      ;;
+esac

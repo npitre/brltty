@@ -50,3 +50,4 @@ reldeps.mk
 *.mod
 *.module
 /grub-root
+/grub-test.d
