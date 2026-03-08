@@ -41,18 +41,22 @@
 #include "embed.h"
 #include "log.h"
 
-GRUB_MOD_LICENSE("gpl3+");
+GRUB_MOD_LICENSE("GPLv3+");
 
 GRUB_MOD_INIT(brltty)
 {
   static char arg0[] = "brltty";
-  static char argQuiet[] = "-q";
+  static char argLogLevel[] = "-l";
+  static char argLogValue[] = "debug";
   static char argNoDaemon[] = "-n";
-  static char *argv[] = { arg0, argQuiet, argNoDaemon, NULL };
-  int argc = 3;
+  static char *argv[] = { arg0, argLogLevel, argLogValue, argNoDaemon, NULL };
+  int argc = 4;
 
+  grub_printf("brltty: calling brlttyConstruct()\n");
   ProgramExitStatus status = brlttyConstruct(argc, argv);
-  if (status != PROG_EXIT_SUCCESS) {
+  if (status == PROG_EXIT_SUCCESS) {
+    grub_printf("brltty: initialized successfully\n");
+  } else {
     grub_printf("brltty: initialization failed (status %d)\n", status);
   }
 }

@@ -24,7 +24,16 @@ programDirectory="$(cd "$(dirname "$0")" && pwd)"
 
 # ── Configurable paths ──────────────────────────────────────────────────────
 
-GRUB_MOD_DIR="${GRUB_MOD_DIR:-/usr/lib/grub/x86_64-efi}"
+# Prefer the locally-built GRUB tree (instrumented for debugging) over
+# the system-installed GRUB modules.
+GRUB_ROOT="${programDirectory}/grub-root"
+if [ -d "${GRUB_ROOT}/grub-core" ] && [ -x "${GRUB_ROOT}/grub-mkimage" ]; then
+   GRUB_MOD_DIR="${GRUB_MOD_DIR:-${GRUB_ROOT}/grub-core}"
+   GRUB_MKIMAGE="${GRUB_ROOT}/grub-mkimage"
+else
+   GRUB_MOD_DIR="${GRUB_MOD_DIR:-/usr/lib/grub/x86_64-efi}"
+   GRUB_MKIMAGE=""
+fi
 OVMF_CODE="${OVMF_CODE:-/usr/share/edk2/ovmf/OVMF_CODE.fd}"
 OVMF_VARS="${OVMF_VARS:-/usr/share/edk2/ovmf/OVMF_VARS.fd}"
 QEMU="${QEMU:-qemu-system-x86_64}"
@@ -75,9 +84,11 @@ check_prerequisites () {
    command -v "${QEMU}" >/dev/null || missing+=("${QEMU}")
    command -v mformat >/dev/null || missing+=("mtools (mformat)")
    command -v mcopy >/dev/null || missing+=("mtools (mcopy)")
-   command -v grub2-mkimage >/dev/null 2>&1 || \
-      command -v grub-mkimage >/dev/null 2>&1 || \
-      missing+=("grub2-mkimage or grub-mkimage")
+   if [ -z "${GRUB_MKIMAGE}" ]; then
+      command -v grub2-mkimage >/dev/null 2>&1 || \
+         command -v grub-mkimage >/dev/null 2>&1 || \
+         missing+=("grub2-mkimage or grub-mkimage")
+   fi
 
    if [ ${#missing[@]} -gt 0 ]; then
       echo "${programName}: missing prerequisites:" >&2
@@ -91,7 +102,9 @@ check_prerequisites () {
 }
 
 grub_mkimage () {
-   if command -v grub2-mkimage >/dev/null 2>&1; then
+   if [ -n "${GRUB_MKIMAGE}" ]; then
+      "${GRUB_MKIMAGE}" "$@"
+   elif command -v grub2-mkimage >/dev/null 2>&1; then
       grub2-mkimage "$@"
    else
       grub-mkimage "$@"
@@ -147,24 +160,29 @@ MTOOLS
    mmd -i "${DISK_IMAGE}@@1M" ::/boot/grub/x86_64-efi
    mmd -i "${DISK_IMAGE}@@1M" ::/boot/grub/brltty
 
+   # Copy brltty.mod into the GRUB module directory so grub-mkimage can find it.
+   cp "${BUILD_DIR}/brltty.mod" "${GRUB_MOD_DIR}/brltty.mod"
+
    info "building GRUB EFI bootloader image"
-   # Build a standalone GRUB EFI binary with essential modules built in.
-   # Additional modules (usb, brltty) are loaded from disk by grub.cfg.
+   # Build a standalone GRUB EFI binary with all modules built in.
+   # USB and brltty MUST be embedded because USB host-controller init
+   # invalidates EFI disk handles, breaking subsequent insmod from disk.
    local grub_efi="${IMAGE_DIR}/bootx64.efi"
    grub_mkimage \
       -O x86_64-efi \
       -o "${grub_efi}" \
       -p /boot/grub \
       -d "${GRUB_MOD_DIR}" \
-      part_gpt fat normal boot configfile serial terminal echo
+      part_gpt fat normal boot configfile serial terminal echo \
+      sleep usb cs5536 ehci brltty
 
    mcopy -i "${DISK_IMAGE}@@1M" "${grub_efi}" ::/EFI/BOOT/BOOTX64.EFI
 
    info "copying GRUB modules"
    # Modules needed at runtime (loaded by grub.cfg via insmod).
    local needed_mods=(
-      # USB stack
-      usb ehci ohci uhci usbms
+      # USB stack (ehci needs cs5536 as a dependency)
+      usb cs5536 ehci usbms
       # Terminal and display
       gfxterm video video_fb efi_gop font all_video
       # Serial (for debug output capture)
@@ -197,7 +215,6 @@ MTOOLS
 # BRLTTY GRUB module test configuration
 #
 # Serial console for debug log capture.
-# Serial console for debug log capture.
 # QEMU maps -serial to COM1 (unit 0).
 serial --unit=0 --speed=115200
 
@@ -210,19 +227,12 @@ echo "────────────────────────�
 echo "BRLTTY GRUB Module Test"
 echo "──────────────────────────────────────────"
 
-insmod sleep
-
-echo "Loading USB stack..."
-insmod usb
-insmod ehci
-insmod ohci
-insmod uhci
-
-echo "Loading brltty module..."
-insmod brltty
+# USB stack and brltty are embedded in the EFI image (grub-mkimage)
+# because USB host-controller init invalidates EFI disk handles.
+# All modules are already loaded — no insmod needed.
 
 echo ""
-echo "brltty module loaded."
+echo "brltty module loaded (embedded)."
 echo "If a braille device is connected, it should now be active."
 echo ""
 echo "Press 'c' for GRUB command line, or wait for shell..."
@@ -300,8 +310,8 @@ do_run () {
          -serial chardev:s0
       )
    else
-      # graphic: serial → log file, VGA on screen.
-      qemu_args+=( -serial "file:${SERIAL_LOG}" )
+      # graphic: no display, serial → log file only.
+      qemu_args+=( -display none -serial "file:${SERIAL_LOG}" )
    fi
 
    # USB passthrough

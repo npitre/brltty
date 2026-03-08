@@ -386,6 +386,9 @@ then
       darwin*)
          LIBCFLAGS=""
          ;;
+      elf*)
+         LIBCFLAGS=""
+         ;;
       *)
          LIBCFLAGS="-fPIC"
          ;;

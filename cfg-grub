@@ -118,6 +118,22 @@ in
       ;;
 esac
 
+# GRUB modules are relocatable ELF objects loaded by GRUB's own linker,
+# which only handles a limited set of relocation types. The flags below
+# match what GRUB uses to compile its own modules:
+#   -mcmodel=large    Use absolute addressing, avoiding GOT-relative
+#                     relocations (R_X86_64_REX_GOTPCRELX) that GRUB's
+#                     x86_64 relocator does not implement.
+#   -fno-PIC          Disable position-independent code (same reason).
+#   -mno-red-zone     Required for code that may run at interrupt context.
+#   -msoft-float      No x87/SSE — GRUB does not save FPU state.
+#   -mno-mmx/sse/sse2/3dnow  No SIMD instructions.
+#   -fno-stack-protector     No __stack_chk_fail in freestanding.
+grubCFLAGS="${grubCFLAGS} -fno-PIC -fno-PIE -mcmodel=large"
+grubCFLAGS="${grubCFLAGS} -mno-red-zone -msoft-float"
+grubCFLAGS="${grubCFLAGS} -mno-mmx -mno-sse -mno-sse2 -mno-3dnow"
+grubCFLAGS="${grubCFLAGS} -fno-stack-protector"
+
 # GRUB headers use #include <grub/cpu/types.h> where "cpu" is a symlink
 # to the target architecture directory (e.g. grub/i386 or grub/x86_64).
 # This symlink is normally created by GRUB's own configure, but since we

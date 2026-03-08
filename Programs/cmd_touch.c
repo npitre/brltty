@@ -76,9 +76,8 @@ handleTouchOff (TouchCommandData *tcd) {
     }
 
     if (!ok && tcd->activeCells && unread) {
-      float factor = (float)tcd->activeCells / unread;
-
-      if (factor > 6) ok = 1;
+      /* Integer equivalent of: (float)activeCells / unread > 6 */
+      if (tcd->activeCells > 6 * unread) ok = 1;
     }
   }
 

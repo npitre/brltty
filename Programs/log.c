@@ -344,7 +344,11 @@ openLogFile (const char *path) {
 
 void
 openSystemLog (void) {
-#if defined(WINDOWS)
+#if defined(GRUB_RUNTIME)
+  /* GRUB has no syslog, no writable files — all output goes to the
+     GRUB console via grub_printf(). Nothing to open. */
+
+#elif defined(WINDOWS)
   if (windowsEventLog == INVALID_HANDLE_VALUE) {
     windowsEventLog = RegisterEventSource(NULL, PACKAGE_TARNAME);
   }
@@ -371,7 +375,10 @@ openSystemLog (void) {
 
 void
 closeSystemLog (void) {
-#if defined(WINDOWS)
+#if defined(GRUB_RUNTIME)
+  /* Nothing to close. */
+
+#elif defined(WINDOWS)
   if (windowsEventLog != INVALID_HANDLE_VALUE) {
     DeregisterEventSource(windowsEventLog);
     windowsEventLog = INVALID_HANDLE_VALUE;
@@ -424,6 +431,25 @@ logData (int level, LogDataFormatter *formatLogData, const void *data) {
   STR_FORMAT(formatLogData, data);
   STR_END;
 
+#if defined(GRUB_RUNTIME)
+  /* In GRUB all log output goes to the console via grub_printf().
+     There is no syslog, no writable log file, and stderr is a
+     sentinel (NULL) — so we bypass the normal write/print paths
+     and print directly.  The fprintf/fputs used here are the stubs
+     from system_grub.c which route to grub_printf(). */
+  if (write || print) {
+    if (logPrefixStack) {
+      const char *pfx = getLogEntryText(logPrefixStack);
+
+      if (*pfx) {
+        fprintf(stderr, "%s: ", pfx);
+      }
+    }
+
+    fprintf(stderr, "%s\n", record);
+  }
+
+#else /* !GRUB_RUNTIME */
   if (write) {
     writeLogRecord(NULL, record);
 
@@ -468,6 +494,7 @@ logData (int level, LogDataFormatter *formatLogData, const void *data) {
     flushStream(stream);
     unlockStream(stream);
   }
+#endif /* GRUB_RUNTIME */
 
   if (push) pushLogMessage(record);
   errno = oldErrno;
