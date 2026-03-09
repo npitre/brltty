@@ -1217,9 +1217,9 @@ includeDataFile (DataFile *file, const wchar_t *name, int length) {
       char path[prefixLength + suffixLength + 1];
       FILE *stream;
 
-      snprintf(path, sizeof(path), "%.*s%.*s",
-               (int)prefixLength, prefixAddress,
-               (int)suffixLength, suffixAddress);
+      memcpy(path, prefixAddress, prefixLength);
+      memcpy(path + prefixLength, suffixAddress, suffixLength);
+      path[prefixLength + suffixLength] = '\0';
 
       if ((stream = openIncludedDataFile(file, path, "r", 0))) {
         if (processDataStream(file, stream, path, file->parameters)) ok = 1;
