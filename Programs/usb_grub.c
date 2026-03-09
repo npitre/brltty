@@ -40,10 +40,29 @@
 #include <grub/usb.h>
 #include <grub/usbtrans.h>
 #include <grub/mm.h>
+#include <grub/time.h>
 
 #include "log.h"
 #include "io_usb.h"
 #include "usb_internal.h"
+
+/* Format up to 16 bytes as hex into a caller-supplied buffer.
+ * Returns the buffer pointer for convenience in logMessage() calls. */
+static char *
+formatHex (char *out, size_t outSize, const void *data, size_t dataLen) {
+  static const char digits[] = "0123456789ABCDEF";
+  const unsigned char *p = data;
+  size_t n = dataLen < 16 ? dataLen : 16;
+  size_t pos = 0;
+
+  for (size_t i = 0; i < n && pos + 3 < outSize; i++) {
+    out[pos++] = digits[p[i] >> 4];
+    out[pos++] = digits[p[i] & 0x0F];
+    if (i + 1 < n) out[pos++] = ' ';
+  }
+  out[pos] = '\0';
+  return out;
+}
 
 struct UsbDeviceExtensionStruct {
   grub_usb_device_t grubDevice;
@@ -67,6 +86,8 @@ usbSetConfiguration (UsbDevice *device, unsigned char configuration) {
   grub_usb_device_t dev = device->extension->grubDevice;
   grub_usb_err_t err;
 
+  logMessage(LOG_DEBUG, "USB: set configuration %u", configuration);
+  grub_errno = GRUB_ERR_NONE;
   err = grub_usb_set_configuration(dev, configuration);
   if (err != GRUB_USB_ERR_NONE) {
     logMessage(LOG_ERR, "GRUB USB set configuration %u failed: %d",
@@ -74,6 +95,7 @@ usbSetConfiguration (UsbDevice *device, unsigned char configuration) {
     errno = EIO;
     return 0;
   }
+  logMessage(LOG_DEBUG, "USB: set configuration %u OK", configuration);
 
   return 1;
 }
@@ -174,6 +196,14 @@ usbControlTransfer (
     reqtype |= GRUB_USB_REQTYPE_OUT;
   }
 
+  logMessage(LOG_DEBUG, "USB: control transfer reqtype=0x%02X request=0x%02X value=0x%04X index=0x%04X len=%u",
+             reqtype, request, value, index, length);
+  if (length > 0 && buffer && direction == UsbEndpointDirection_Output) {
+    char hex[3 * 16 + 1];
+    logMessage(LOG_DEBUG, "USB: control OUT data=[%s]",
+               formatHex(hex, sizeof(hex), buffer, length));
+  }
+  grub_errno = GRUB_ERR_NONE;
   err = grub_usb_control_msg(dev, reqtype, request, value, index,
                              length, (char *)buffer);
   if (err != GRUB_USB_ERR_NONE) {
@@ -183,6 +213,12 @@ usbControlTransfer (
     errno = EIO;
     return -1;
   }
+  if (length > 0 && buffer && direction == UsbEndpointDirection_Input) {
+    char hex[3 * 16 + 1];
+    logMessage(LOG_DEBUG, "USB: control IN data=[%s]",
+               formatHex(hex, sizeof(hex), buffer, length));
+  }
+  logMessage(LOG_DEBUG, "USB: control transfer OK");
 
   return length;
 }
@@ -243,6 +279,9 @@ grubFindEndpoint (UsbDevice *device, unsigned char endpointNumber, unsigned char
   unsigned char interfaceNumber = brlttyInterface->bInterfaceNumber;
   unsigned char targetAddress = endpointNumber | direction;
 
+  logMessage(LOG_DEBUG, "USB: findEndpoint: interface=%u target=0x%02X",
+             interfaceNumber, targetAddress);
+
   /* Search through all configurations and interfaces for the matching endpoint. */
   for (int config = 0; config < dev->descdev.configcnt; config++) {
     struct grub_usb_desc_if *interf =
@@ -274,7 +313,7 @@ usbReadEndpoint (
 ) {
   grub_usb_device_t dev = device->extension->grubDevice;
   grub_usb_err_t err;
-  grub_size_t actual;
+  grub_size_t actual = 0;
 
   struct grub_usb_desc_endp *endp =
     grubFindEndpoint(device, endpointNumber, 0x80);
@@ -283,18 +322,31 @@ usbReadEndpoint (
     return -1;
   }
 
+  logMessage(LOG_DEBUG, "USB: bulk read ep=%u len=%zu timeout=%d addr=0x%02X toggle=%d maxpkt=%u",
+             endpointNumber, length, timeout, endp->endp_addr,
+             dev->toggle[endp->endp_addr], endp->maxpacket);
+  grub_errno = GRUB_ERR_NONE;
   err = grub_usb_bulk_read_extended(dev, endp, length, (char *)buffer,
                                     timeout, &actual);
   if (err == GRUB_USB_ERR_TIMEOUT) {
+    logMessage(LOG_DEBUG, "USB: bulk read ep=%u timeout (actual=%zu) toggle=%d",
+               endpointNumber, actual, dev->toggle[endp->endp_addr]);
     errno = EAGAIN;
     return -1;
   }
 
   if (err != GRUB_USB_ERR_NONE) {
-    logMessage(LOG_ERR, "GRUB USB bulk read on endpoint %u failed: %d",
-               endpointNumber, err);
+    logMessage(LOG_ERR, "USB: bulk read ep=%u failed: err=%d actual=%zu",
+               endpointNumber, err, actual);
     errno = EIO;
     return -1;
+  }
+
+  {
+    char hex[3 * 16 + 1];
+    logMessage(LOG_DEBUG, "USB: bulk read ep=%u OK actual=%zu toggle=%d data=[%s]",
+               endpointNumber, actual, dev->toggle[endp->endp_addr],
+               formatHex(hex, sizeof(hex), buffer, actual));
   }
 
   return actual;
@@ -318,6 +370,13 @@ usbWriteEndpoint (
     return -1;
   }
 
+  {
+    char hex[3 * 16 + 1];
+    logMessage(LOG_DEBUG, "USB: bulk write ep=%u len=%zu addr=0x%02X data=[%s]",
+               endpointNumber, length, endp->endp_addr,
+               formatHex(hex, sizeof(hex), buffer, length));
+  }
+  grub_errno = GRUB_ERR_NONE;
   err = grub_usb_bulk_write(dev, endp, length, (char *)buffer);
   if (err != GRUB_USB_ERR_NONE) {
     logMessage(LOG_ERR, "GRUB USB bulk write on endpoint %u failed: %d",
@@ -325,6 +384,13 @@ usbWriteEndpoint (
     errno = EIO;
     return -1;
   }
+  logMessage(LOG_DEBUG, "USB: bulk write ep=%u OK", endpointNumber);
+
+  /* Let the device process the command before we attempt to read
+   * a response.  GRUB's USB stack performs synchronous transfers
+   * with no kernel-level queuing, so without this gap the next
+   * bulk read can arrive before the device has prepared its reply. */
+  grub_millisleep(50);
 
   return length;
 }
@@ -390,11 +456,19 @@ static int
 grubUsbDeviceIterator (grub_usb_device_t dev, void *closure) {
   GrubUsbSearchData *search = closure;
 
+  logMessage(LOG_DEBUG, "USB iterate: device %p, initialized=%d",
+             dev, dev->initialized);
+
   if (!dev->initialized) {
-    if (grub_usb_device_initialize(dev) != GRUB_USB_ERR_NONE) {
+    grub_usb_err_t err = grub_usb_device_initialize(dev);
+    if (err != GRUB_USB_ERR_NONE) {
+      logMessage(LOG_DEBUG, "USB iterate: device_initialize failed: %d", err);
       return 0; /* skip this device, continue iterating */
     }
   }
+
+  logMessage(LOG_DEBUG, "USB iterate: vendor=0x%04x product=0x%04x",
+             dev->descdev.vendorid, dev->descdev.prodid);
 
   UsbDeviceExtension *devx = malloc(sizeof(*devx));
   if (!devx) {
@@ -422,7 +496,12 @@ usbFindDevice (UsbDeviceChooser *chooser, UsbChooseChannelData *data) {
     .device = NULL
   };
 
+  logMessage(LOG_DEBUG, "USB: scanning for devices...");
+  grub_errno = GRUB_ERR_NONE;  /* clear stale errors from file operations */
   grub_usb_iterate(grubUsbDeviceIterator, &search);
+  if (!search.device) {
+    logMessage(LOG_DEBUG, "USB: no matching device found");
+  }
   return search.device;
 }
 
