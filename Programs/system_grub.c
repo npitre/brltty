@@ -55,6 +55,18 @@ strdup (const char *s) {
   return dup;
 }
 
+/* Note: GRUB's posix_wrap defines memcmp as a macro expanding to
+ * grub_memcmp.  We provide the actual implementation here — do NOT
+ * call grub_memcmp() or this will recurse infinitely. */
+int
+memcmp (const void *s1, const void *s2, grub_size_t n) {
+  const unsigned char *p1 = s1, *p2 = s2;
+  for (grub_size_t i = 0; i < n; i++) {
+    if (p1[i] != p2[i]) return (int)p1[i] - (int)p2[i];
+  }
+  return 0;
+}
+
 char *
 strtok (char *str, const char *delim) {
   static char *next;
@@ -147,13 +159,15 @@ void
 qsort (void *base, grub_size_t nmemb, grub_size_t size,
        int (*compar)(const void *, const void *)) {
   unsigned char *array = base;
+  unsigned char *tmp = grub_malloc(size);
   grub_size_t gap;
+
+  if (!tmp) return;
 
   for (gap = nmemb / 2; gap > 0; gap /= 2) {
     grub_size_t i;
 
     for (i = gap; i < nmemb; i++) {
-      unsigned char tmp[size];
       grub_memcpy(tmp, array + i * size, size);
 
       grub_size_t j = i;
@@ -165,6 +179,8 @@ qsort (void *base, grub_size_t nmemb, grub_size_t size,
       grub_memcpy(array + j * size, tmp, size);
     }
   }
+
+  grub_free(tmp);
 }
 
 void *
@@ -227,10 +243,55 @@ FILE_ptr stdin = NULL;
 FILE_ptr stdout = NULL;
 FILE_ptr stderr = NULL;
 
+/* Normalize a path in-place by resolving "." and ".." components.
+ * GRUB's grub_file_open does not handle ".." in paths. */
+static void
+normalize_path (char *path) {
+  char *components[64];
+  int depth = 0;
+  int absolute = (path[0] == '/');
+
+  char *p = path;
+  char *token = p;
+  while (1) {
+    if (*p == '/' || *p == '\0') {
+      char end = *p;
+      *p = '\0';
+      if (token[0] == '\0' || (token[0] == '.' && token[1] == '\0')) {
+        /* skip empty and "." */
+      } else if (token[0] == '.' && token[1] == '.' && token[2] == '\0') {
+        if (depth > 0) depth--;
+      } else {
+        if (depth < 64) components[depth++] = token;
+      }
+      if (end == '\0') break;
+      token = p + 1;
+    }
+    p++;
+  }
+
+  /* Rebuild the path */
+  char *out = path;
+  if (absolute) *out++ = '/';
+  for (int i = 0; i < depth; i++) {
+    if (i > 0) *out++ = '/';
+    grub_size_t len = grub_strlen(components[i]);
+    grub_memmove(out, components[i], len);
+    out += len;
+  }
+  *out = '\0';
+}
+
 FILE_ptr
 fopen (const char *path, const char *mode) {
   (void)mode;
-  grub_file_t f = grub_file_open(path, GRUB_FILE_TYPE_CAT);
+
+  /* Make a mutable copy so we can normalize ".." */
+  char normalized[grub_strlen(path) + 1];
+  grub_strcpy(normalized, path);
+  normalize_path(normalized);
+
+  grub_file_t f = grub_file_open(normalized, GRUB_FILE_TYPE_CAT);
   return (FILE_ptr)f;
 }
 
