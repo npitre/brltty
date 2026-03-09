@@ -96,7 +96,7 @@ check_prerequisites () {
          echo "  - ${item}" >&2
       done
       echo "" >&2
-      echo "On Fedora: dnf install qemu-system-x86-core edk2-ovmf mtools grub2-efi-x64-modules" >&2
+      echo "On Fedora: dnf install qemu-system-x86-core edk2-ovmf mtools grub2-efi-x64-modules qemu-device-usb-host" >&2
       exit 1
    fi
 }
@@ -160,53 +160,93 @@ MTOOLS
    mmd -i "${DISK_IMAGE}@@1M" ::/boot/grub/x86_64-efi
    mmd -i "${DISK_IMAGE}@@1M" ::/boot/grub/brltty
 
-   # Copy brltty.mod into the GRUB module directory so grub-mkimage can find it.
+   # Copy brltty.mod into the GRUB module directory (for grub-mkimage if
+   # embedded, and for the disk image so insmod can find it at runtime).
    cp "${BUILD_DIR}/brltty.mod" "${GRUB_MOD_DIR}/brltty.mod"
 
    info "building GRUB EFI bootloader image"
-   # Build a standalone GRUB EFI binary with all modules built in.
-   # USB and brltty MUST be embedded because USB host-controller init
-   # invalidates EFI disk handles, breaking subsequent insmod from disk.
+   # The -c option embeds a bootstrap config that runs immediately after
+   # module init (before normal mode tries to load grub.cfg from disk).
+   # This sets root= so that file access works, and configures serial I/O.
+   #
+   # Only core + USB modules are embedded. brltty.mod is loaded from disk
+   # via insmod in grub.cfg, matching how it would be deployed on real systems.
    local grub_efi="${IMAGE_DIR}/bootx64.efi"
+   local early_cfg="${IMAGE_DIR}/early.cfg"
+   cat > "${early_cfg}" <<'EARLYCFG'
+serial --unit=0 --speed=115200
+terminal_output serial
+terminal_input serial brltty_keys
+set root=(ahci0,gpt1)
+EARLYCFG
+
    grub_mkimage \
       -O x86_64-efi \
       -o "${grub_efi}" \
       -p /boot/grub \
+      -c "${early_cfg}" \
       -d "${GRUB_MOD_DIR}" \
       part_gpt fat normal boot configfile serial terminal echo \
-      sleep usb cs5536 ehci brltty
+      sleep usb uhci ahci ata brltty
 
    mcopy -i "${DISK_IMAGE}@@1M" "${grub_efi}" ::/EFI/BOOT/BOOTX64.EFI
 
    info "copying GRUB modules"
    # Modules needed at runtime (loaded by grub.cfg via insmod).
    local needed_mods=(
-      # USB stack (ehci needs cs5536 as a dependency)
-      usb cs5536 ehci usbms
+      # Disk (native, survives USB init)
+      ahci ata
+      # USB stack
+      usb uhci usbms
       # Terminal and display
       gfxterm video video_fb efi_gop font all_video
       # Serial (for debug output capture)
       serial
       # Text/command support
       normal terminal echo test true sleep
+      # BRLTTY (loaded via insmod in grub.cfg)
+      brltty
    )
 
    for mod in "${needed_mods[@]}"; do
       local src="${GRUB_MOD_DIR}/${mod}.mod"
       if [ -f "${src}" ]; then
-         mcopy -i "${DISK_IMAGE}@@1M" "${src}" ::/boot/grub/x86_64-efi/
+         mcopy -o -i "${DISK_IMAGE}@@1M" "${src}" ::/boot/grub/x86_64-efi/
       else
          info "  warning: ${mod}.mod not found in ${GRUB_MOD_DIR}, skipping"
       fi
    done
 
-   info "copying brltty.mod"
-   mcopy -i "${DISK_IMAGE}@@1M" "${BUILD_DIR}/brltty.mod" ::/boot/grub/x86_64-efi/
-
    info "copying brltty data files"
-   # Text table — needed for character translation
-   if [ -f "${programDirectory}/Tables/Text/en.ttb" ]; then
-      mcopy -i "${DISK_IMAGE}@@1M" "${programDirectory}/Tables/Text/en.ttb" ::/boot/grub/brltty/
+   local tables="${programDirectory}/Tables"
+
+   # Text tables — needed for character translation
+   if [ -d "${tables}/Text" ]; then
+      mmd -i "${DISK_IMAGE}@@1M" ::/boot/grub/brltty/Text 2>/dev/null || true
+      for ttb in "${tables}"/Text/*.ttb; do
+         [ -f "${ttb}" ] && mcopy -i "${DISK_IMAGE}@@1M" "${ttb}" ::/boot/grub/brltty/Text/
+      done
+   fi
+
+   # Key tables — all drivers and shared includes
+   if [ -d "${tables}/Input" ]; then
+      mmd -i "${DISK_IMAGE}@@1M" ::/boot/grub/brltty/Input 2>/dev/null || true
+
+      # Shared .kti files in the Input root
+      for kti in "${tables}"/Input/*.kti; do
+         [ -f "${kti}" ] && mcopy -i "${DISK_IMAGE}@@1M" "${kti}" ::/boot/grub/brltty/Input/
+      done
+
+      # Per-driver subdirectories (.ktb and .kti)
+      for dir in "${tables}"/Input/*/; do
+         [ -d "${dir}" ] || continue
+         local dname
+         dname=$(basename "${dir}")
+         mmd -i "${DISK_IMAGE}@@1M" ::/boot/grub/brltty/Input/"${dname}" 2>/dev/null || true
+         for f in "${dir}"*.ktb "${dir}"*.kti; do
+            [ -f "${f}" ] && mcopy -i "${DISK_IMAGE}@@1M" "${f}" ::/boot/grub/brltty/Input/"${dname}"/
+         done
+      done
    fi
 
    info "writing grub.cfg"
@@ -220,13 +260,9 @@ serial --unit=0 --speed=115200
 
 # Use serial as primary output (avoids double-printing on VGA+serial).
 # The VGA console remains available via 'terminal_output console'.
+# Include brltty_keys so BRLTTY's poll hook (getkey callback) keeps firing.
 terminal_output serial
-terminal_input serial
-
-# Set root device so GRUB file access works (e.g. for brltty tables).
-# Note: embedded modules init before grub.cfg runs, so init-time file
-# access still fails. This helps with runtime file access only.
-set root=(hd0,gpt1)
+terminal_input serial brltty_keys
 
 echo "──────────────────────────────────────────"
 echo "BRLTTY GRUB Module Test"
@@ -234,7 +270,6 @@ echo "────────────────────────�
 
 # USB stack and brltty are embedded in the EFI image (grub-mkimage)
 # because USB host-controller init invalidates EFI disk handles.
-# All modules are already loaded — no insmod needed.
 
 echo ""
 echo "brltty module loaded (embedded)."
@@ -298,11 +333,13 @@ do_run () {
       -drive if=pflash,format=raw,readonly=on,file="${OVMF_CODE}"
       -drive if=pflash,format=raw,file="${vars_copy}"
 
-      # Disk image
-      -drive file="${DISK_IMAGE}",format=raw,if=virtio
+      # Disk image — use IDE (not virtio) so GRUB can access it via
+      # native AHCI/ATA drivers even after USB init invalidates EFI handles.
+      -drive file="${DISK_IMAGE}",format=raw,if=ide
 
-      # USB controller (xHCI for USB 2.0/3.0 devices)
+      # xHCI for OVMF/general use; UHCI for GRUB's USB stack (full-speed devices)
       -device qemu-xhci,id=xhci
+      -device piix3-usb-uhci,id=uhci
    )
 
    if [ "${nographic}" -eq 1 ]; then
@@ -319,14 +356,22 @@ do_run () {
       qemu_args+=( -display none -serial "file:${SERIAL_LOG}" )
    fi
 
-   # USB passthrough
+   # USB passthrough via hotplug (requires qemu-device-usb-host on Fedora).
+   # The device must be hotplugged AFTER GRUB boots — if present at startup,
+   # OVMF claims it and GRUB's UHCI driver cannot take it over cleanly.
+   local usb_hotplug=""
    if [ -n "${usb_host}" ]; then
+      if ! "${QEMU}" -device help 2>&1 | grep -q "usb-host"; then
+         die "QEMU lacks 'usb-host' device — install qemu-device-usb-host"
+      fi
       local vendor="${usb_host%%:*}"
       local product="${usb_host##*:}"
+      local monitor_sock="${IMAGE_DIR}/qemu-monitor.sock"
+      usb_hotplug="device_add usb-host,bus=uhci.0,vendorid=0x${vendor},productid=0x${product},id=brldev"
       qemu_args+=(
-         -device usb-host,bus=xhci.0,vendorid="0x${vendor}",productid="0x${product}"
+         -monitor "unix:${monitor_sock},server,nowait"
       )
-      info "USB passthrough: ${vendor}:${product}"
+      info "USB passthrough: ${vendor}:${product} (hotplug after boot)"
    fi
 
    info "booting QEMU (serial log: ${SERIAL_LOG})"
@@ -335,7 +380,31 @@ do_run () {
    fi
 
    : > "${SERIAL_LOG}"
-   "${QEMU}" "${qemu_args[@]}"
+
+   if [ -n "${usb_hotplug}" ]; then
+      "${QEMU}" "${qemu_args[@]}" &
+      local qemu_pid=$!
+
+      # Wait for GRUB to reach grub.cfg by watching the serial log for its
+      # output. This replaces the old blind "sleep 15" — typically takes 2-3s.
+      local waited=0
+      while ! grep -q "brltty module loaded" "${SERIAL_LOG}" 2>/dev/null && [ "${waited}" -lt 15 ]; do
+         sleep 1
+         waited=$((waited + 1))
+      done
+
+      if [ -S "${monitor_sock}" ]; then
+         info "hotplugging USB device..."
+         echo "${usb_hotplug}" | socat - "UNIX-CONNECT:${monitor_sock}" >/dev/null 2>&1 || true
+      else
+         info "warning: monitor socket not found, skipping USB hotplug"
+      fi
+
+      wait "${qemu_pid}" || true
+      rm -f "${monitor_sock}"
+   else
+      "${QEMU}" "${qemu_args[@]}"
+   fi
 
    info "QEMU exited. Serial log: ${SERIAL_LOG}"
 }

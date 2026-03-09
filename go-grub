@@ -1,0 +1,115 @@
+#!/bin/bash
+###############################################################################
+# Run as root:  sudo ./go
+#
+# Tests the BRLTTY GRUB module via USB passthrough. Auto-detects the braille
+# device currently used by the host BRLTTY (via the usbfs driver binding in
+# sysfs), stops host BRLTTY, passes the device to QEMU, then restarts BRLTTY.
+#
+# All output is logged to grub-test.d/go.log so it can be reviewed after
+# the host BRLTTY restarts (since the braille display is unavailable during
+# the test).
+###############################################################################
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TIMEOUT=30               # Kill QEMU after this many seconds
+GO_LOG="${SCRIPT_DIR}/grub-test.d/go.log"
+
+# Tee all output to the log file
+exec > >(tee "${GO_LOG}") 2>&1
+
+# -- Detect braille USB device -----------------------------------------------
+# BRLTTY claims USB devices via usbfs. Each claimed interface appears under
+# /sys/bus/usb/drivers/usbfs/<busport:iface>. The parent directory contains
+# idVendor and idProduct. We deduplicate since one device has multiple
+# interfaces.
+
+detect_brltty_usb_device () {
+   local seen="" vid pid devid
+   for iface in /sys/bus/usb/drivers/usbfs/[0-9]*; do
+      [ -d "$iface" ] || continue
+      local devdir
+      devdir=$(realpath "$iface/..")
+      vid=$(cat "$devdir/idVendor" 2>/dev/null) || continue
+      pid=$(cat "$devdir/idProduct" 2>/dev/null) || continue
+      devid="${vid}:${pid}"
+      # deduplicate
+      case ",$seen," in *,"$devid",*) continue ;; esac
+      seen="${seen:+$seen,}$devid"
+      echo "$devid"
+   done
+}
+
+# -- Pre-flight checks -------------------------------------------------------
+
+if [ "$(id -u)" -ne 0 ]; then
+   echo "error: must run as root (sudo $0)" >&2
+   exit 1
+fi
+
+if [ ! -f "${SCRIPT_DIR}/grub-test.d/test.img" ]; then
+   echo "error: disk image not found -- run './grub-test build-image' first" >&2
+   exit 1
+fi
+
+USB_DEVICE=$(detect_brltty_usb_device)
+if [ -z "${USB_DEVICE}" ]; then
+   echo "error: no USB device found under usbfs driver (is BRLTTY running?)" >&2
+   exit 1
+fi
+
+# Handle unlikely case of multiple devices
+if [ "$(echo "$USB_DEVICE" | wc -l)" -gt 1 ]; then
+   echo "Multiple braille USB devices detected:"
+   echo "$USB_DEVICE"
+   echo "Using the first one."
+   USB_DEVICE=$(echo "$USB_DEVICE" | head -1)
+fi
+
+echo "Detected braille device: ${USB_DEVICE}"
+
+if ! lsusb -d "${USB_DEVICE}" >/dev/null 2>&1; then
+   echo "error: USB device ${USB_DEVICE} not found in lsusb" >&2
+   exit 1
+fi
+
+# -- Stop host BRLTTY ---------------------------------------------------------
+
+echo "Stopping host BRLTTY..."
+systemctl stop brltty 2>/dev/null || true
+killall brltty 2>/dev/null || true
+sleep 2
+
+# Verify device is still present and not claimed
+if ! lsusb -d "${USB_DEVICE}" >/dev/null 2>&1; then
+   echo "error: USB device ${USB_DEVICE} disappeared after stopping BRLTTY" >&2
+   exit 1
+fi
+
+echo "Host BRLTTY stopped. Braille display will be unavailable during test."
+echo "QEMU will run for ${TIMEOUT}s then be killed automatically."
+echo ""
+
+# -- Run GRUB test ------------------------------------------------------------
+
+set +e
+timeout "${TIMEOUT}" "${SCRIPT_DIR}/grub-test" run --usb-host="${USB_DEVICE}"
+QEMU_EXIT=$?
+set -e
+
+echo ""
+if [ "${QEMU_EXIT}" -eq 124 ]; then
+   echo "QEMU killed after ${TIMEOUT}s timeout (normal)."
+elif [ "${QEMU_EXIT}" -ne 0 ]; then
+   echo "QEMU exited with status ${QEMU_EXIT}"
+fi
+
+# -- Restart host BRLTTY ------------------------------------------------------
+
+echo "Restarting host BRLTTY..."
+sleep 1
+systemctl start brltty 2>/dev/null || true
+echo "Done. Host BRLTTY should reconnect shortly."
+echo "Full log saved to: ${GO_LOG}"
