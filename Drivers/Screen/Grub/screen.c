@@ -298,12 +298,7 @@ static struct grub_term_input brlttyInputTerminal;
 
 static int
 brlttyInput_getkey (struct grub_term_input *term) {
-  /* Run one non-blocking BRLTTY update cycle. This polls the braille
-   * device for input, fires timer callbacks (display refresh, keepalive),
-   * and writes updated content to the braille display. The 0 timeout
-   * ensures we return immediately after one pass through the event loop. */
   brlttyWait(0);
-
   return popKey();
 }
 

@@ -49,11 +49,16 @@ GRUB_MOD_INIT(brltty)
   static char argLogLevel[] = "-l";
   static char argLogValue[] = "debug";
   static char argNoDaemon[] = "-n";
-  static char *argv[] = { arg0, argLogLevel, argLogValue, argNoDaemon, NULL };
-  int argc = 4;
+  static char argTablesDir[] = "-T";
+  static char argTablesDirValue[] = "/boot/grub/brltty";
+  static char *argv[] = {
+    arg0, argLogLevel, argLogValue, argNoDaemon,
+    argTablesDir, argTablesDirValue, NULL
+  };
+  int argc = 6;
 
-  grub_printf("brltty: calling brlttyConstruct()\n");
   ProgramExitStatus status = brlttyConstruct(argc, argv);
+
   if (status == PROG_EXIT_SUCCESS) {
     grub_printf("brltty: initialized successfully\n");
 
