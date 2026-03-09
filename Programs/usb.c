@@ -1002,7 +1002,13 @@ usbOpenInterface (
     }
   }
 
-  if (usbAlternativeCount(device, interface) == 1) goto done;
+  if (usbAlternativeCount(device, interface) == 1) {
+    /* Always send SET_INTERFACE even for a single alternate setting.
+     * This resets endpoint data toggles on the device (USB 2.0 §9.1.1.5)
+     * and activates endpoints.  Linux's cdc_acm driver always does this. */
+    usbSetAlternative(device, interface, alternative);
+    goto done;
+  }
 
   {
     unsigned char response[1];
