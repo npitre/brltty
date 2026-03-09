@@ -300,8 +300,10 @@ in
       dnl GRUB's posix_wrap does not provide (fcntl.h, signal.h, time.h, etc.)
       dnl These come last so GRUB's own headers take priority.
       brltty_gcc_cppflags="${brltty_gcc_cppflags} -I`pwd`/Headers/grub"
+      GRUB_BUILD=yes
       ;;
 esac
+AC_SUBST([GRUB_BUILD])
 
 test "${GCC}" = "yes" && {
    CFLAGS="${CFLAGS} ${brltty_gcc_cflags}"

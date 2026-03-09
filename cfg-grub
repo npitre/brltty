@@ -207,6 +207,13 @@ configureOptions=(
    LD=ld
    STRIP=strip
    RANLIB=ranlib
+
+   # Force-enable features that autoconf cannot detect in cross mode
+   # (the test program compiles but cannot be linked/run freestanding).
+   # GCC always supports these attributes; without packed, structs
+   # like USB_CDC_ACM_LineCoding gain padding and break USB protocols.
+   ax_cv_have_var_attribute_packed=yes
+   ax_cv_have_var_attribute_unused=yes
 )
 
 "${programDirectory}/configure" --quiet "${configureOptions[@]}" "${configureArgs[@]}"

@@ -16,7 +16,13 @@
 # This software is maintained by Dave Mielke <dave@mielke.cc>.
 ###############################################################################
 
+GRUB_BUILD = @GRUB_BUILD@
+
+ifeq ($(GRUB_BUILD),yes)
+all: brltty.mod
+else
 all: all-commands all-tools $(ALL_API) $(ALL_API_BINDINGS)
+endif
 
 all-commands: all-brltty all-brltty-trtxt all-brltty-ttb all-brltty-ctb all-brltty-atb all-brltty-ktb all-brltty-tune all-brltty-morse all-brltty-hid all-brltty-cmdref $(ALL_BRLTTY_PTY)
 all-brltty: brltty$X | $(BRAILLE_DRIVERS) $(SPEECH_DRIVERS) $(SCREEN_DRIVERS)
