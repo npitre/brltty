@@ -3,19 +3,45 @@ Braille Support for the GRUB Boot Loader
 
 BRLTTY can run as a loadable GRUB module, providing braille display
 accessibility during the boot menu. This allows blind users to read
-and navigate the GRUB menu using a refreshable braille display.
+and navigate the GRUB menu, interact with the GRUB command line, and
+edit boot entries using a refreshable braille display.
+
+The module integrates with GRUB's terminal system: screen content is
+captured via a shadow terminal buffer, and braille key presses are
+translated into GRUB keystrokes injected back into the input queue.
+Polling happens cooperatively through GRUB's input loop — each time
+GRUB checks for keyboard input, BRLTTY gets a chance to update the
+braille display and process key events.
 
 Supported Braille Displays
 --------------------------
 
-All USB braille displays supported by BRLTTY should work. The braille display
-must be connected through a USB 2.0 port (UHCI, OHCI, or EHCI controller).
-USB 3.0 (xHCI) controllers are not currently supported by GRUB's USB stack.
+All USB braille displays supported by BRLTTY should work.
 
-Serial-attached braille displays are also supported via GRUB's serial port
-driver.
+GRUB's USB stack has drivers for UHCI, OHCI, and EHCI controllers
+(USB 1.x and 2.0). It does not have a native xHCI (USB 3.0) driver.
+However, on most UEFI systems this does not matter: the firmware
+provides USB Legacy Support, which emulates USB 2.0 behavior for
+devices on xHCI-controlled ports. GRUB's EHCI driver sees the device
+through this emulation layer without knowing xHCI is involved.
 
-Bluetooth braille displays are not supported — GRUB has no Bluetooth stack.
+This means braille displays should work on any USB port of a typical
+UEFI system, as long as "USB Legacy Support" is enabled in the BIOS
+settings (it usually is by default).
+
+Systems where USB may not work:
+
+* Coreboot-based systems without runtime firmware emulation — GRUB
+  gets no USB on xHCI-only platforms without a native xHCI driver.
+* Some newer Intel boards (post-Skylake) that dropped EHCI entirely
+  and have weak or absent USB legacy emulation in their UEFI.
+* Headless/embedded boards without BIOS USB legacy support.
+
+Serial-attached braille displays are also supported via GRUB's serial
+port driver.
+
+Bluetooth braille displays are not supported — GRUB has no Bluetooth
+stack.
 
 Speech output is not available — GRUB has no audio subsystem.
 
@@ -87,7 +113,10 @@ The module must be built against a configured GRUB source tree. There is no
 
 5. Build the GRUB module::
 
-      make brltty.mod
+      make
+
+   When configured for a GRUB platform, ``make`` automatically builds
+   ``brltty.mod`` instead of the normal host targets.
 
 Building for Multiple Platforms
 -------------------------------
@@ -101,8 +130,8 @@ separately for each platform:
       ./configure --target=x86_64 --with-platform=efi
       cd /path/to/brltty
       ./cfg-grub --with-grub-platform=x86_64-efi
-      make brltty.mod
-      cp brltty.mod /output/x86_64-efi/
+      make
+      cp Programs/brltty.mod /output/x86_64-efi/
 
 2. Reconfigure and build for Legacy BIOS::
 
@@ -111,8 +140,8 @@ separately for each platform:
       cd /path/to/brltty
       make clean
       ./cfg-grub --with-grub-platform=i386-pc
-      make brltty.mod
-      cp brltty.mod /output/i386-pc/
+      make
+      cp Programs/brltty.mod /output/i386-pc/
 
 Installation
 ------------
@@ -125,7 +154,17 @@ Installation
       # Legacy BIOS systems:
       cp brltty.mod /boot/grub/i386-pc/
 
-2. To load the module automatically at every boot, add the following to
+2. Install key tables and text tables. BRLTTY loads these from disk at
+   runtime — without them, braille key bindings will not work::
+
+      mkdir -p /boot/grub/brltty
+      cp -r Tables/Input /boot/grub/brltty/
+      cp -r Tables/Text  /boot/grub/brltty/
+
+   The tables directory must match the ``-T`` argument passed to BRLTTY
+   (default: ``/boot/grub/brltty``).
+
+3. To load the module automatically at every boot, add the following to
    ``/etc/default/grub``::
 
       GRUB_PRELOAD_MODULES="usb uhci ohci ehci brltty"
@@ -138,6 +177,29 @@ Installation
 
       update-grub
 
+   Loading all three USB host controller modules (``uhci``, ``ohci``,
+   ``ehci``) is harmless and ensures the display works regardless of the
+   actual USB controller. On UEFI systems with USB Legacy Support, the
+   ``ehci`` module is typically sufficient even for xHCI ports.
+
+Configuration
+-------------
+
+BRLTTY's options can be configured through GRUB environment variables set
+in ``grub.cfg``. The module reads these via GRUB's environment API::
+
+   # In grub.cfg (before insmod brltty):
+   set BRLTTY_BRAILLE_DRIVER=hw
+   set BRLTTY_TEXT_TABLE=en_US
+
+The module currently starts BRLTTY with a hardcoded set of arguments
+equivalent to::
+
+   brltty -l debug -n -T /boot/grub/brltty
+
+The ``-T`` flag sets the tables directory. The ``-n`` flag disables
+daemonization (not meaningful in GRUB, but required by the option parser).
+
 Loading Manually
 ----------------
 
@@ -145,14 +207,70 @@ From the GRUB command line, load the USB stack and then the BRLTTY module::
 
    grub> insmod usb
    grub> insmod uhci
-   grub> insmod ohci
-   grub> insmod ehci
    grub> insmod brltty
+
+Replace ``uhci`` with ``ohci`` or ``ehci`` as appropriate for your USB
+controller. You can load multiple controller modules. The braille display
+must be plugged in before loading the brltty module.
 
 For serial-attached displays, load the serial module instead::
 
    grub> insmod serial
    grub> insmod brltty
+
+How It Works
+------------
+
+The module integrates with GRUB through two mechanisms:
+
+**Screen capture**: BRLTTY registers a wrapper ``grub_term_output`` terminal
+that interposes on the active display terminal. All output (character writes,
+cursor movement, screen clears) is captured into a shadow buffer while being
+forwarded to the real terminal. BRLTTY's screen driver reads from this shadow
+buffer to render content on the braille display.
+
+**Key injection**: BRLTTY registers a ``grub_term_input`` terminal whose
+``getkey()`` callback calls ``brlttyWait(0)`` — one non-blocking pass through
+the event loop. This fires timer callbacks, polls USB for braille key events,
+and refreshes the display. Braille key presses are translated to GRUB
+keystrokes and returned through the input terminal.
+
+This cooperative polling model means BRLTTY runs whenever GRUB checks for
+input — during menu display, command line editing, or any interactive prompt.
+
+Testing with QEMU
+------------------
+
+The repository includes test scripts for running the module in QEMU with
+USB passthrough of a real braille display:
+
+1. Build the module (see Building above).
+
+2. Build the test disk image::
+
+      ./grub-test build-image
+
+3. Run the test. The ``go-grub`` script auto-detects the braille display
+   used by the host BRLTTY, stops host BRLTTY, runs QEMU with USB
+   passthrough, and restarts host BRLTTY afterwards::
+
+      sudo ./go-grub
+
+   Output is logged to ``grub-test.d/go.log`` for review after the test
+   (since the braille display is unavailable during the QEMU run).
+
+   The ``grub-test`` script can also be run directly::
+
+      ./grub-test run --usb-host=VENDOR:PRODUCT
+
+   Use ``./grub-test --help`` for all options including ``--nographic``
+   for an interactive GRUB serial console.
+
+Prerequisites for QEMU testing::
+
+   # Fedora:
+   dnf install qemu-system-x86-core edk2-ovmf mtools \
+               grub2-efi-x64-modules qemu-device-usb-host socat
 
 Troubleshooting
 ---------------
@@ -161,15 +279,43 @@ Display not detected
    Ensure the USB modules are loaded before ``brltty.mod``. The display must
    be plugged in before loading the module.
 
+Keys not responding
+   Ensure key table files are installed under ``/boot/grub/brltty/Input/``.
+   Without key tables, BRLTTY receives key events but cannot map them to
+   commands. Check that the table directory matches the ``-T`` argument.
+
 Only some USB ports work
-   GRUB's USB stack supports UHCI, OHCI, and EHCI controllers only. Try
-   different USB ports — many systems have a mix of USB 2.0 and 3.0 ports.
+   Verify that "USB Legacy Support" is enabled in the BIOS settings —
+   this allows the firmware to emulate USB 2.0 for xHCI ports. If some
+   ports still do not work, try different ports — on some systems, only
+   specific ports have legacy emulation. As a last resort, a USB 2.0
+   hub or add-in card with a UHCI/OHCI/EHCI controller will bypass the
+   firmware emulation entirely.
+
+Display shows only cursor, no text
+   The braille display shows screen content captured from GRUB's terminal
+   output. If GRUB has not produced any output yet (e.g., waiting at a
+   blank menu), the display may appear empty except for the cursor.
+
+Module fails to load
+   The ``brltty.mod`` file must match the GRUB platform (x86_64-efi vs
+   i386-pc) and should be built against a GRUB source tree close to the
+   installed version.
 
 Limitations
 -----------
 
 * Bluetooth is not supported.
 * Speech is not supported.
-* USB 3.0 (xHCI) host controllers are not supported by GRUB.
+* GRUB has no native xHCI (USB 3.0) driver. On UEFI systems this is
+  transparent thanks to firmware USB Legacy Support emulation. On
+  coreboot or systems without USB legacy emulation, USB braille
+  displays will not work unless a UHCI/OHCI/EHCI controller is available.
+* GRUB's ``grub_snprintf`` does not support the ``%.*s`` format specifier
+  (precision via ``*`` argument). BRLTTY code that uses this has been
+  patched to use direct memory operations instead.
+* GRUB's ``grub_file_open`` does not handle ``..`` in file paths. The
+  ``fopen`` shim normalizes paths before opening.
 * The module must be compiled from source against a configured GRUB source
   tree. The GRUB version should match (or be close to) the installed version.
+* File access is read-only — preferences cannot be saved.

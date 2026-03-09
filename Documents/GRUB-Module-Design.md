@@ -369,67 +369,55 @@ GRUB menu loop
             -> return injected GRUB keycode or GRUB_TERM_NO_KEY
 ```
 
-### 5.4 Module Entry Point and Command Registration
+### 5.4 Module Entry Point
 
-GRUB's `insmod` command does not pass arguments to modules — `grub_mod_init()`
-receives only a `grub_dl_t` module handle. To accept configuration,
-`GRUB_MOD_INIT` registers a `brltty` GRUB command, and the actual
-initialization happens when that command is invoked.
+BRLTTY starts immediately when the module is loaded — `GRUB_MOD_INIT` calls
+`brlttyConstruct()` with a hardcoded argv, then pumps the event loop to
+bootstrap the screen and braille drivers:
 
 ```c
-static grub_err_t
-grub_cmd_brltty (grub_command_t cmd, int argc, char *argv[])
-{
-  // argc/argv come from the GRUB command line, e.g.:
-  //   brltty -b hw -q -n
-  brlttyConstruct(argc, argv);
-  return GRUB_ERR_NONE;
-}
-
 GRUB_MOD_INIT(brltty)
 {
-  grub_register_command("brltty", grub_cmd_brltty,
-                        "[OPTIONS]", "Start BRLTTY braille support.");
+  static char arg0[] = "brltty";
+  static char argLogLevel[] = "-l";
+  static char argLogValue[] = "debug";
+  static char argNoDaemon[] = "-n";
+  static char argTablesDir[] = "-T";
+  static char argTablesDirValue[] = "/boot/grub/brltty";
+  static char *argv[] = {
+    arg0, argLogLevel, argLogValue, argNoDaemon,
+    argTablesDir, argTablesDirValue, NULL
+  };
+  int argc = 6;
+
+  ProgramExitStatus status = brlttyConstruct(argc, argv);
+  if (status == PROG_EXIT_SUCCESS) {
+    for (int i = 0; i < 10; i++) brlttyWait(0);
+  }
 }
 
 GRUB_MOD_FINI(brltty)
 {
   brlttyDestruct();
-  grub_unregister_command(...);
 }
 ```
 
-This gives users and distro packagers full control via `grub.cfg`:
+The `-T /boot/grub/brltty` flag tells BRLTTY where to find key tables and
+text tables on the GRUB filesystem. The initial `brlttyWait(0)` loop fires
+the async alarms that `brlttyConstruct()` schedules — without this, the
+screen and braille drivers would not start until GRUB's input loop begins.
+
+Configuration is also available through GRUB environment variables, since
+`getenv()` maps to `grub_env_get()`:
 
 ```
-# Load the module and USB stack
-insmod usb
-insmod uhci
-insmod ohci
-insmod ehci
-insmod brltty
-
-# Start BRLTTY with options
-brltty -b hw -q -n
+# In grub.cfg (before insmod brltty):
+set BRLTTY_BRAILLE_DRIVER=hw
+set BRLTTY_TEXT_TABLE=en_US
 ```
 
-Or from the GRUB command line interactively:
-
-```
-grub> insmod brltty
-grub> brltty --braille-driver=hw
-```
-
-GRUB environment variables provide an alternative configuration channel.
-`GRUB_MOD_INIT` can read variables via `grub_env_get()` for auto-start
-scenarios where the user wants BRLTTY to start immediately on module load
-without a separate command:
-
-```
-# In grub.cfg:
-set brltty_args="-b hw -q -n"
-insmod brltty
-```
+A future enhancement could register a `brltty` GRUB command via
+`grub_register_command()` to allow passing arguments interactively.
 
 
 ## 6. Configuration and File Access
@@ -568,7 +556,7 @@ maps standard C functions to GRUB equivalents:
 | Time | `time`, `localtime`, `gmtime`, `strftime` | `time` → `grub_get_time_ms()/1000`, others are minimal stubs |
 | Environment | `getenv` | → `grub_env_get()` |
 | Process | `exit` | → `grub_fatal()` |
-| Option parsing | `getopt` (+ `optarg`, `optind`, `opterr`, `optopt` globals) | Returns -1 (GRUB uses `grub_register_command`) |
+| Option parsing | `getopt` (+ `optarg`, `optind`, `opterr`, `optopt` globals) | Full implementation — handles short options with required arguments |
 | Locale | `setlocale` | Returns `"C"` |
 | Stubs | `srand`, `unlink`, `rename`, `pipe`, `fdopen`, `freopen`, `setvbuf`, `select` | No-op or return -1 |
 
@@ -665,10 +653,19 @@ mode. Two defines are forced in `prologue.h`:
 
 ## 8. Implementation Status
 
+### Working End-to-End
+
+The module has been verified in QEMU with USB passthrough of a HumanWare
+Brailliant BI 40 braille display. Screen content is rendered on the braille
+display, and braille key presses are correctly translated to GRUB navigation
+commands (line up/down, window left/right, etc.).
+
 ### Completed
 
 - **Module entry point** (`Programs/grub_module.c`) —
-  `GRUB_MOD_INIT`/`GRUB_MOD_FINI` calling `brlttyConstruct()`/`brlttyDestruct()`
+  `GRUB_MOD_INIT`/`GRUB_MOD_FINI` calling `brlttyConstruct()`/`brlttyDestruct()`.
+  Passes `-T /boot/grub/brltty` to configure tables directory, pumps
+  initial event loop iterations to bootstrap drivers.
 
 - **Screen driver** (`Drivers/Screen/Grub/screen.c`) —
   Shadow terminal buffer, terminal output wrapper (putchar/gotoxy/cls/
@@ -676,54 +673,83 @@ mode. Two defines are forced in `prologue.h`:
   `brlttyWait(0)` integration in `getkey()`
 
 - **USB backend** (`Programs/usb_grub.c`) —
-  Full implementation mapping BRLTTY's USB functions to GRUB's USB API
-
-- **Build configuration** (`cfg-grub`) —
-  Platform auto-detection and explicit override (`--with-grub-platform=`),
-  native GCC toolchain with `-m32`/`-m64`, all tools overridden to avoid
-  cross-compiler requirement, all drivers built as internal
-
-- **Build system** (`configure.ac`) —
-  Corrected include path ordering (`-nostdinc` before `-isystem`/`-I`),
-  GRUB root and posix_wrap include paths
-
-- **Makefile rules** (`Programs/Makefile.in`) —
-  `brltty.module` and `brltty.mod` build targets
-
-- **Documentation** —
-  `Documents/README.Grub` (build instructions),
-  `Documents/GRUB-Module-Design.md` (this document)
+  Full implementation mapping BRLTTY's USB functions to GRUB's USB API.
+  Includes debug logging, 50ms post-write delay (needed because GRUB's
+  synchronous USB stack has no hardware queuing), and `grub_errno` management.
 
 - **POSIX compatibility layer** (Section 7) —
   All BRLTTY core source files compile cleanly (0 errors, 0 warnings) under
   GRUB's freestanding environment. Implemented via:
   - `Headers/grub/` stub headers (time.h, signal.h, fcntl.h, termios.h, etc.)
-  - `Programs/system_grub.c` (30+ POSIX function implementations)
+  - `Programs/system_grub.c` (30+ POSIX function implementations including
+    `memcmp`, `qsort`, `getopt`, `fopen` with path normalization)
   - `Headers/prologue.h` GRUB_RUNTIME block (types, macros, declarations,
     wide-char functions)
   - `NO_FLOAT` guards in color/cmdargs code
   - Variadic `ARRAY_SIZE` macro for GRUB/BRLTTY compatibility
 
-### Remaining Work
+- **File I/O** — `fopen`/`fread`/`fclose` shims in `system_grub.c` wrap
+  GRUB's file API (`grub_file_open`/`grub_file_read`/`grub_file_close`).
+  Path normalization resolves `..` components since GRUB's file API cannot
+  handle them. Key tables and text tables are loaded from disk at runtime.
 
-- **Build `.mod` file** — Build system changes to produce a GRUB `.mod` file
-  instead of a standalone executable. The `genmod.sh` post-processing step
-  (adding `.modname`/`.moddeps` sections, stripping symbols) needs
-  finalization. Currently reaches the link stage with only expected GRUB
-  runtime symbol references unresolved.
+- **Build system** —
+  - `cfg-grub` — platform auto-detection and explicit override, native GCC
+    with `-m32`/`-m64`, forced attribute detection for cross-compilation
+  - `configure.ac` — GRUB platform detection, compiler flags, `GRUB_BUILD`
+    substitution variable
+  - `Programs/Makefile.in` — `GRUB_BUILD=yes` makes `all` build `brltty.mod`
 
-- **Command-based entry point** (Section 5.4) — Update `Programs/grub_module.c`
-  to register a `brltty` GRUB command via `grub_register_command()` instead of
-  calling `brlttyConstruct()` directly from `GRUB_MOD_INIT`. This enables
-  passing arguments (e.g., `brltty -b hw -q`) and supports auto-start via
-  GRUB environment variables.
+- **GRUB compatibility fixes** —
+  - `Programs/datafile.c` — replaced `%.*s` format specifier (unsupported by
+    GRUB's `grub_snprintf`) with `memcpy` operations
+  - `Programs/usb.c` — always send `SET_INTERFACE` even for single alternate
+    setting, to reset endpoint data toggles per USB 2.0 spec
 
-- **GRUB file I/O wrappers** (Section 6) — Implement `GRUB_RUNTIME` paths
-  in BRLTTY's file I/O code (`Programs/file.c`) wrapping `grub_file_open()` /
-  `grub_file_read()` / `grub_file_close()`. This enables loading `brltty.conf`,
-  key tables, and text tables from disk.
+- **Test infrastructure** —
+  - `grub-test` — build disk image, run QEMU, serial logging, USB hotplug
+  - `go-grub` — auto-detect braille device, stop/restart host BRLTTY,
+    run test with timeout, log output for post-test review
 
-- **Testing** — Verify in QEMU with USB passthrough and on real hardware.
+- **Documentation** —
+  `Documents/README.Grub` (build/install/usage instructions),
+  `Documents/GRUB-Module-Design.md` (this document)
+
+### Known Limitations
+
+- GRUB's `grub_snprintf` does not support `%.*s`. About 24 uses exist
+  in the codebase; most are in `logMessage` calls (non-fatal on GRUB) or
+  platform-specific files not compiled for GRUB. `ctb_compile.c:1028`
+  is a potential issue if contraction tables are used in the future.
+
+- GRUB has no native xHCI USB driver (patches exist but were never merged:
+  [2017](https://lists.gnu.org/archive/html/grub-devel/2017-03/msg00012.html),
+  [2020 v2](https://lists.gnu.org/archive/html/grub-devel/2020-12/msg00111.html)).
+  On UEFI systems this is usually transparent: firmware USB Legacy Support
+  emulates USB 2.0 for xHCI-controlled ports, so GRUB's EHCI driver sees
+  the device through the emulation layer. On coreboot systems or boards
+  without USB legacy emulation, USB devices are inaccessible without
+  external UHCI/OHCI/EHCI hardware.
+
+- USB host controller initialization in GRUB invalidates EFI disk handles.
+  On QEMU, this is worked around by using IDE disks with GRUB's native
+  AHCI/ATA drivers. On real hardware, modules should be embedded in the
+  EFI image via `grub-mkimage` or loaded before USB init.
+
+### Future Work
+
+- **Command-based entry point** — Register a `brltty` GRUB command via
+  `grub_register_command()` to allow passing arguments from `grub.cfg`
+  (e.g., `brltty -b hw -T /custom/path`). Currently arguments are hardcoded.
+
+- **Real hardware testing** — Verify on physical machines with various USB
+  controller types (UHCI, OHCI, EHCI).
+
+- **Contraction tables** — May require additional `%.*s` fixes in
+  `ctb_compile.c`.
+
+- **Distro packaging** — Integration with distribution GRUB packages for
+  automatic key table installation and `GRUB_PRELOAD_MODULES` configuration.
 
 
 ## 9. Key Source Files Reference
@@ -743,7 +769,7 @@ mode. Two defines are forced in `prologue.h`:
 | `Headers/grub/search.h` | Hash table stubs |
 | `Headers/grub/sys/stat.h` | `struct stat` and stubs |
 | `Headers/grub/sys/ioctl.h` | `TIOCGWINSZ`, `struct winsize` |
-| `Programs/system_grub.c` | POSIX function implementations (30+ functions) |
+| `Programs/system_grub.c` | POSIX function implementations (30+ functions), path normalization |
 | `Programs/grub_module.c` | GRUB module entry point |
 | `Programs/serial_grub.c` | Serial I/O via GRUB serial API |
 | `Programs/serial_grub.h` | GRUB serial type mappings |
