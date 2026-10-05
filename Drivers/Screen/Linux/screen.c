@@ -854,7 +854,7 @@ typedef struct {
 #include <poll.h>
 
 static int
-canMonitorScreen (void) {
+isScreenUpdatePending (void) {
   struct pollfd pollDescriptor = {
     .fd = screenDescriptor,
     .events = POLLPRI
@@ -865,10 +865,16 @@ canMonitorScreen (void) {
 
 #else /* can poll */
 static int
-canMonitorScreen (void) {
+isScreenUpdatePending (void) {
   return 0;
 }
 #endif /* can poll */
+
+static int
+canMonitorScreen (void) {
+  // The kernel reports an update as pending on a newly opened device.
+  return isScreenUpdatePending();
+}
 
 static int
 setScreenName (void) {
@@ -1032,10 +1038,26 @@ vcsaReadHeader (ScreenHeader *header) {
 
 static size_t
 readScreenDevice (off_t offset, void *buffer, size_t size) {
-  size_t result = 0;
   const size_t headerSize = sizeof(ScreenHeader);
+  size_t headerCount = 0;
 
   if (offset < headerSize) {
+    headerCount = headerSize - offset;
+    if (size < headerCount) headerCount = size;
+  }
+
+  size_t contentCount = 0;
+
+  /* Read the content before getting the header. Reading the vcsa device
+   * resets its pending update indicator, so doing it first ensures that
+   * any change made while the header is being gotten will be detected.
+   */
+  if (size > headerCount) {
+    off_t contentOffset = offset + headerCount - headerSize + sizeof(VcsaHeader);
+    contentCount = vcsaReadDevice(contentOffset, (unsigned char *)buffer + headerCount, size - headerCount);
+  }
+
+  if (headerCount) {
     static unsigned char useGetConSizeCsrPos = 1;
     unsigned char useVcsa = 1;
 
@@ -1059,32 +1081,14 @@ readScreenDevice (off_t offset, void *buffer, size_t size) {
 
     if (useVcsa) {
       if (!vcsaReadHeader(&header)) {
-        goto done;
+        return 0;
       }
     }
 
-    {
-      const void *from = &header + offset;
-      size_t count = headerSize - offset;
-      if (size < count) count = size;
-
-      buffer = mempcpy(buffer, from, count);
-      result += count;
-
-      if (!(size -= count)) goto done;
-      offset = headerSize;
-    }
+    memcpy(buffer, (const unsigned char *)&header + offset, headerCount);
   }
 
-  offset -= headerSize;
-  offset += sizeof(VcsaHeader);
-
-  size_t count = vcsaReadDevice(offset, buffer, size);
-  if (!count) goto done;
-  result += count;
-
-done:
-  return result;
+  return headerCount + contentCount;
 }
 
 static void *screenCacheBuffer;
@@ -1972,6 +1976,7 @@ refresh_LinuxScreen (void) {
     } RefreshState;
 
     RefreshState refreshState = REFRESH_NEEDED;
+    unsigned int updateRetriesLeft = 2;
 
     while (1) {
       problemText = NULL;
@@ -2007,6 +2012,29 @@ refresh_LinuxScreen (void) {
       } else {
         // refreshState == REFRESH_NEEDED
         refreshState = refreshCache()? REFRESH_DONE: REFRESH_FAILED;
+
+        /* The screen content, the cursor position, and the unicode text are
+         * read separately, and the kernel doesn't read a large screen
+         * atomically, so the snapshot is inconsistent if the screen is
+         * updated while it's being taken, or even unusable if the screen is
+         * resized. Retake it when the kernel reports that an update occurred
+         * in the meantime.
+         */
+        if (isMonitorable && isScreenUpdatePending()) {
+          if (updateRetriesLeft) {
+            updateRetriesLeft -= 1;
+            refreshState = REFRESH_NEEDED;
+
+            logMessage(LOG_CATEGORY(SCREEN_DRIVER),
+              "screen updated during cache refresh - retrying"
+            );
+          } else {
+            logMessage(LOG_CATEGORY(SCREEN_DRIVER),
+              "screen still being updated - not retrying"
+            );
+          }
+        }
+
         continue;
       }
 
